@@ -1,15 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from './supabaseClient';
-import { Truck, Package, CheckCircle, Upload, ClipboardList, LayoutDashboard } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
+import { Truck, Package, Upload, ClipboardList, LayoutDashboard, CheckCircle, AlertTriangle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
+// --- CONFIGURAÇÃO DO SUPABASE (DIRETO NO CÓDIGO) ---
+const supabaseUrl = 'https://ofurvromibbqgzbvzbsx.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9mdXJ2cm9taWJicWd6YnZ6YnN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTc5MjEsImV4cCI6MjA4NDA3MzkyMX0.JufTH0lwnu_LXzqsUTP3jly2GQoUc4Kjy-LT_lbtbk0';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// --- O APP COMEÇA AQUI ---
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({ trp: '', placaVeiculo: '', pedido: '', tipoNotificacao: 'FALTA TOTAL' });
+  
+  // Estado do formulário manual
+  const [formData, setFormData] = useState({ 
+    trp: '', 
+    placaVeiculo: '', 
+    pedido: '', 
+    tipoNotificacao: 'FALTA TOTAL' 
+  });
 
-  // --- 1. BUSCAR DADOS DO SUPABASE ---
+  // 1. BUSCAR DADOS DO BANCO
   const fetchRecords = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -22,11 +35,12 @@ function App() {
     setLoading(false);
   };
 
+  // Carrega os dados ao abrir o site
   useEffect(() => {
     fetchRecords();
   }, []);
 
-  // --- 2. SALVAR NOVO REGISTRO ---
+  // 2. SALVAR NOVO REGISTRO (MANUAL)
   const handleSave = async (e) => {
     e.preventDefault();
     if (!formData.trp || !formData.pedido) return alert("Preencha TRP e Pedido");
@@ -38,12 +52,12 @@ function App() {
     } else {
       alert('Registro salvo com sucesso!');
       setFormData({ trp: '', placaVeiculo: '', pedido: '', tipoNotificacao: 'FALTA TOTAL' });
-      fetchRecords(); // Atualiza a tabela
+      fetchRecords(); 
       setActiveTab('dashboard');
     }
   };
 
-  // --- 3. UPLOAD EXCEL ---
+  // 3. UPLOAD EXCEL (AUTOMÁTICO)
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if(!file) return;
@@ -55,7 +69,7 @@ function App() {
       const ws = wb.Sheets[wb.SheetNames[0]];
       const data = XLSX.utils.sheet_to_json(ws);
       
-      // Mapeia colunas do Excel para o Banco (Ajuste os nomes conforme seu Excel)
+      // Prepara os dados do Excel para o Supabase
       const formattedData = data.map(row => ({
         trp: row['TRP'] || row['trp'] || 'Importado',
         pedido: String(row['PEDIDO'] || row['pedido'] || Math.random().toString().slice(2,8)),
@@ -68,6 +82,7 @@ function App() {
         if (!error) {
           alert(`${formattedData.length} registros importados!`);
           fetchRecords();
+          setActiveTab('dashboard');
         } else {
           alert("Erro na importação: " + error.message);
         }
@@ -78,7 +93,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-20">
-      {/* Header */}
+      {/* --- CABEÇALHO --- */}
       <header className="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-10 shadow-sm flex justify-between items-center">
         <div className="flex items-center gap-3">
           <div className="bg-orange-500 p-2 rounded-lg text-white">
@@ -105,10 +120,10 @@ function App() {
 
       <main className="max-w-6xl mx-auto p-6 mt-4">
         
-        {/* VIEW: DASHBOARD */}
+        {/* --- TELA: DASHBOARD --- */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            {/* Stats */}
+            {/* Card de Estatística */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
                 <div className="bg-blue-50 p-3 rounded-full text-blue-600"><Package size={24}/></div>
@@ -119,7 +134,7 @@ function App() {
               </div>
             </div>
 
-            {/* Table */}
+            {/* Tabela de Dados */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center">
                 <h3 className="font-bold text-lg text-slate-800">Histórico de Apontamentos</h3>
@@ -159,7 +174,7 @@ function App() {
                     {records.length === 0 && (
                       <tr>
                         <td colSpan="5" className="px-6 py-12 text-center text-slate-400 font-medium">
-                          Nenhum registro encontrado no banco de dados.
+                          {loading ? 'Carregando...' : 'Nenhum registro encontrado.'}
                         </td>
                       </tr>
                     )}
@@ -170,11 +185,11 @@ function App() {
           </div>
         )}
 
-        {/* VIEW: REGISTER */}
+        {/* --- TELA: REGISTRO E UPLOAD --- */}
         {activeTab === 'register' && (
           <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4">
             
-            {/* Manual Form */}
+            {/* Formulário Manual */}
             <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100">
               <div className="flex items-center gap-3 mb-6">
                  <div className="bg-slate-900 text-white p-2 rounded-lg"><ClipboardList size={20}/></div>
@@ -218,7 +233,7 @@ function App() {
               </form>
             </div>
 
-            {/* Batch Upload */}
+            {/* Upload de Excel */}
             <div className="bg-blue-600 p-8 rounded-3xl shadow-xl text-white text-center relative overflow-hidden">
                <div className="relative z-10">
                  <div className="bg-white/20 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
@@ -233,10 +248,8 @@ function App() {
                  </label>
                </div>
             </div>
-
           </div>
         )}
-
       </main>
     </div>
   );
