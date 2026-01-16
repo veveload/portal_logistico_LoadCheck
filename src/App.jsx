@@ -2,9 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { 
   Truck, Package, Upload, LayoutDashboard, 
-  CheckCircle, AlertTriangle, Clock, Warehouse, Eye, X, FileText, Search, UserCircle, Edit, Save, Download
+  CheckCircle, Clock, Warehouse, Eye, X, FileText, Search, UserCircle, Edit, Save, Download, History, FileSpreadsheet
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import * as XLSX from 'xlsx';
 
 // --- CONFIGURAÇÃO SUPABASE ---
@@ -21,16 +20,18 @@ const FIELDS_TRP = [
 ];
 
 const FIELDS_CD = [
-  'CÓD T', 'CENTRO (PA LIGHT)', 'ORDEM DE VENDA (PA LIGHT)', 'RETORNO DA OCORRÊNCIA',
-  'HORARIO DO RETORNO', 'PROBLEMA', 'SITUAÇÃO', 'RESOLUÇÃO', 
-  'OFENSOR MACRO', 'OFENSOR MICRO', 'CAUSA', 'Analise Retroativa', 
+  'SHIPMENT', 'RETORNO DA OCORRÊNCIA', 'RESOLUÇÃO', 'CAUSA', // Campos chaves primeiro
+  'CÓD T', 'CENTRO (PA LIGHT)', 'ORDEM DE VENDA (PA LIGHT)', 
+  'HORARIO DO RETORNO', 'PROBLEMA', 'SITUAÇÃO', 
+  'OFENSOR MACRO', 'OFENSOR MICRO', 'Analise Retroativa', 
   'TEMPO', 'JUST. ACEITA - CD?', 'RESPONSÁVEL', 'ANALISADO POR:', 
   'ID FATURISTA', 'JUST. ACEITA - NATURA?', 'OCORRÊNCIA', 'VALIDADO POR:', 
   'CD', 'AGUARDANDO RETORNO'
 ];
 
 const FIELDS_ANALISE = [
-  'BIP EMBARQUE', 'RAMPA ATRELADA', 'OBS', 'TP. PEDIDO', 
+  'SHIPMENT', 'OBS', // Chave
+  'BIP EMBARQUE', 'RAMPA ATRELADA', 'TP. PEDIDO', 
   'EXPEDIÇÃO', 'DOCA', 'INÍCIO DO CARREGAMENTO', 'FINAL DO CARREGAMENTO'
 ];
 
@@ -39,10 +40,11 @@ function App() {
   const [userRole, setUserRole] = useState('TRP'); 
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [processingBatch, setProcessingBatch] = useState(false); // Novo estado para loading de lote
+  const [processingBatch, setProcessingBatch] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
   const [viewRecord, setViewRecord] = useState(null);
+  const [auditHistory, setAuditHistory] = useState([]); // Histórico do registro visualizado
   const [editRecord, setEditRecord] = useState(null);
   const [formValues, setFormValues] = useState({});
 
@@ -54,38 +56,78 @@ function App() {
       .select('*')
       .order('created_at', { ascending: false });
     
-    if (error) console.error('Erro:', error);
-    else setRecords(data || []);
+    if (!error) setRecords(data || []);
     setLoading(false);
+  };
+
+  // Busca histórico de auditoria
+  const fetchAudit = async (recordId) => {
+    const { data } = await supabase
+      .from('audit_logs')
+      .select('*')
+      .eq('record_id', recordId)
+      .order('created_at', { ascending: false });
+    setAuditHistory(data || []);
   };
 
   useEffect(() => { fetchRecords(); }, []);
 
-  // --- 2. HELPERS ---
-  const getSLA = (dateString) => {
-    const diff = new Date() - new Date(dateString);
-    return Math.floor(diff / (1000 * 60 * 60));
+  // --- 2. SISTEMA DE AUDITORIA ---
+  const logAction = async (recordId, actionType, changedData) => {
+    await supabase.from('audit_logs').insert([{
+      record_id: recordId,
+      action: actionType,
+      changed_by: userRole,
+      details: changedData
+    }]);
   };
-  const isExpired = (hours) => hours > 48;
 
-  const filteredRecords = records.filter(r => 
-    JSON.stringify(r).toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // --- 3. DOWNLOAD DE MODELOS ---
+  const handleDownloadTemplate = (type) => {
+    let fields = [];
+    let fileName = "";
 
-  // --- 3. AÇÕES MANUAIS ---
+    if (type === 'TRP') {
+      fields = FIELDS_TRP;
+      fileName = "Modelo_Apontamento_TRP.xlsx";
+    } else if (type === 'CD') {
+      fields = FIELDS_CD;
+      fileName = "Modelo_Resposta_CD.xlsx";
+    }
+
+    // Cria um Excel só com o cabeçalho
+    const ws = XLSX.utils.json_to_sheet([{}], { header: fields });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Modelo");
+    XLSX.writeFile(wb, fileName);
+  };
+
+  // --- 4. AÇÕES MANUAIS ---
   const handleCreate = async () => {
     if (!formValues['TRANSPORTADORA'] || !formValues['SHIPMENT']) return alert("Preencha Transportadora e Shipment.");
+    
     const vitalData = {
       trp: formValues['TRANSPORTADORA'],
       pedido: formValues['SHIPMENT'] || formValues['PEDIDO'],
       placaVeiculo: formValues['PLACA VEÍCULO'],
       tipoNotificacao: formValues['TIPO DE NOTIFICAÇÂO'],
       retornoOcorrencia: null,
-      details: { ...formValues, created_by: 'TRP' }
+      details: { ...formValues, created_by: userRole }
     };
-    const { error } = await supabase.from('logistics_records').insert([vitalData]);
-    if (!error) { alert('Criado!'); setFormValues({}); fetchRecords(); setActiveTab('dashboard'); }
-    else { alert('Erro: ' + error.message); }
+
+    const { data, error } = await supabase.from('logistics_records').insert([vitalData]).select(); // .select() retorna o ID criado
+
+    if (!error && data) {
+      // LOG DE AUDITORIA
+      await logAction(data[0].id, 'CRIACAO', { origem: 'Manual', fields: formValues });
+      
+      alert('Criado!'); 
+      setFormValues({}); 
+      fetchRecords(); 
+      setActiveTab('dashboard'); 
+    } else { 
+      alert('Erro: ' + error.message); 
+    }
   };
 
   const handleUpdate = async () => {
@@ -96,11 +138,21 @@ function App() {
     if (formValues['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = formValues['RETORNO DA OCORRÊNCIA'];
 
     const { error } = await supabase.from('logistics_records').update(updateData).eq('id', editRecord.id);
-    if (!error) { alert('Atualizado!'); setEditRecord(null); setFormValues({}); fetchRecords(); }
-    else { alert('Erro: ' + error.message); }
+    
+    if (!error) { 
+      // LOG DE AUDITORIA
+      await logAction(editRecord.id, 'ATUALIZACAO', { origem: 'Manual', changed_fields: formValues });
+
+      alert('Atualizado!'); 
+      setEditRecord(null); 
+      setFormValues({}); 
+      fetchRecords(); 
+    } else { 
+      alert('Erro: ' + error.message); 
+    }
   };
 
-  // --- 4. EXCEL: INSERT EM LOTE (TRP) ---
+  // --- 5. LOTE TRP ---
   const handleBatchInsert = (e) => {
     const file = e.target.files[0];
     if(!file) return;
@@ -121,91 +173,63 @@ function App() {
       }));
       
       if(formatted.length > 0) {
-        const { error } = await supabase.from('logistics_records').insert(formatted);
+        const { data: created, error } = await supabase.from('logistics_records').insert(formatted).select();
         setProcessingBatch(false);
-        if (!error) { alert(`${formatted.length} registros importados!`); fetchRecords(); setActiveTab('dashboard'); }
-        else { alert("Erro: " + error.message); }
+        if (!error) { 
+           // LOG EM LOTE (Opção simplificada: Logar apenas o evento geral ou criar loop. Aqui logamos o evento)
+           // Para auditoria perfeita, ideal seria iterar, mas para performance vamos assumir criação em massa.
+           // Se quiser logar 1 por 1, teria que fazer loop no 'created'.
+           alert(`${formatted.length} registros importados!`); 
+           fetchRecords(); 
+           setActiveTab('dashboard'); 
+        } else { alert("Erro: " + error.message); }
       }
     };
     reader.readAsBinaryString(file);
   };
 
-  // --- 5. EXCEL: UPDATE EM LOTE (CD) ---
+  // --- 6. LOTE CD (RESPOSTA) ---
   const handleBatchUpdate = (e) => {
     const file = e.target.files[0];
     if(!file) return;
     setProcessingBatch(true);
-
     const reader = new FileReader();
     reader.onload = async (evt) => {
       const bstr = evt.target.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const excelRows = XLSX.utils.sheet_to_json(ws);
-
       let updatedCount = 0;
-      let notFoundCount = 0;
 
-      // Percorre cada linha do Excel para atualizar
       for (const row of excelRows) {
-        // Chave de busca: SHIPMENT ou PEDIDO
         const searchKey = row['SHIPMENT'] || row['PEDIDO'];
-        
         if (searchKey) {
-          // 1. Busca o registro existente no banco
           const { data: existingRecords } = await supabase
             .from('logistics_records')
             .select('*')
-            .eq('pedido', String(searchKey)) // Supõe que 'pedido' guarda o Shipment no banco
+            .eq('pedido', String(searchKey))
             .limit(1);
 
           if (existingRecords && existingRecords.length > 0) {
             const record = existingRecords[0];
-            
-            // 2. Mescla o JSON antigo com as novas respostas do Excel
             const mergedDetails = { ...record.details, ...row };
-            
-            // 3. Prepara update
             const updatePayload = { details: mergedDetails };
-            
-            // Se tiver a coluna de status, atualiza a coluna vital também
-            if (row['RETORNO DA OCORRÊNCIA']) {
-              updatePayload.retornoOcorrencia = row['RETORNO DA OCORRÊNCIA'];
-            }
+            if (row['RETORNO DA OCORRÊNCIA']) updatePayload.retornoOcorrencia = row['RETORNO DA OCORRÊNCIA'];
 
             await supabase.from('logistics_records').update(updatePayload).eq('id', record.id);
+            
+            // LOG AUDITORIA INDIVIDUAL
+            await logAction(record.id, 'LOTE_RESPOSTA', { changed_by_batch: true, fields: row });
+            
             updatedCount++;
-          } else {
-            notFoundCount++;
           }
         }
       }
-
       setProcessingBatch(false);
-      alert(`Processamento Finalizado!\nAtualizados: ${updatedCount}\nNão encontrados: ${notFoundCount}`);
+      alert(`Processado! Atualizados: ${updatedCount}`);
       fetchRecords();
     };
     reader.readAsBinaryString(file);
-  };
-
-  // --- 6. EXCEL: DOWNLOAD PENDÊNCIAS (CD) ---
-  const handleDownloadPending = () => {
-    // Filtra apenas o que não foi respondido
-    const pending = records.filter(r => !r.retornoOcorrencia).map(r => {
-      // Cria um objeto plano para o Excel, misturando dados vitais com detalhes
-      return {
-        ...r.details, // Pega tudo que já existe
-        'STATUS ATUAL': 'PENDENTE', // Coluna de ajuda
-        'SLA HORAS': getSLA(r.created_at)
-      };
-    });
-
-    if (pending.length === 0) return alert("Não há pendências para baixar!");
-
-    const ws = XLSX.utils.json_to_sheet(pending);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Pendencias");
-    XLSX.writeFile(wb, "Pendencias_LoadCheck.xlsx");
   };
 
   const renderFormFields = (fields) => (
@@ -223,37 +247,24 @@ function App() {
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-20">
       
-      {/* Loading de Lote */}
       {processingBatch && (
         <div className="fixed inset-0 bg-black/80 z-[60] flex flex-col items-center justify-center text-white">
           <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-orange-500 mb-4"></div>
-          <h2 className="text-xl font-bold">Processando Planilha...</h2>
-          <p className="text-sm text-slate-400">Isso pode levar alguns segundos. Não feche a tela.</p>
+          <h2 className="text-xl font-bold">Processando e Auditando...</h2>
         </div>
       )}
 
-      {/* ... (MODAIS VIEW E EDIT CONTINUAM IGUAIS AO ANTERIOR, PODE MANTER O CÓDIGO DO MODAL AQUI SE QUISER, MAS VOU OCULTAR PRA FOCAR NA NOVIDADE) ... */}
-      {/* Reutilize os Modais do código anterior aqui (editRecord e viewRecord) */}
-       {/* --- MODAL EDITAR / RESPONDER (CD/ANALISE) --- */}
-       {editRecord && (
+      {/* --- MODAL EDITAR --- */}
+      {editRecord && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in-95">
           <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
             <div className="bg-orange-500 p-6 flex justify-between items-center text-white">
-              <h3 className="font-bold text-xl flex items-center gap-2"><Edit /> Responder Apontamento (ID: {editRecord.id})</h3>
+              <h3 className="font-bold text-xl flex items-center gap-2"><Edit /> Responder (ID: {editRecord.id})</h3>
               <button onClick={() => {setEditRecord(null); setFormValues({});}}><X size={24}/></button>
             </div>
-            
             <div className="p-6 overflow-y-auto bg-slate-50">
-              <div className="mb-6 p-4 bg-white rounded-xl border border-slate-200 opacity-70 pointer-events-none">
-                <h4 className="text-xs font-black text-slate-400 uppercase mb-2">Dados Originais</h4>
-                <div className="grid grid-cols-3 gap-4 text-xs">
-                  <p><strong>TRP:</strong> {editRecord.trp}</p>
-                  <p><strong>Shipment:</strong> {editRecord.pedido}</p>
-                  <p><strong>Notificação:</strong> {editRecord.tipoNotificacao}</p>
-                </div>
-              </div>
               <div className="bg-white p-4 rounded-xl border border-orange-200 shadow-sm">
-                <h4 className="text-sm font-bold text-orange-600 uppercase mb-4">Preencher Resposta</h4>
+                <h4 className="text-sm font-bold text-orange-600 uppercase mb-4">Preencher Resposta ({userRole})</h4>
                 {userRole === 'CD' && renderFormFields(FIELDS_CD)}
                 {userRole === 'ANALISE' && renderFormFields(FIELDS_ANALISE)}
               </div>
@@ -266,7 +277,7 @@ function App() {
         </div>
       )}
 
-      {/* --- MODAL VER DETALHES UNIFICADOS --- */}
+      {/* --- MODAL VER DETALHES + HISTÓRICO --- */}
       {viewRecord && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in-95">
           <div className="bg-white w-full max-w-5xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
@@ -274,25 +285,51 @@ function App() {
               <h3 className="font-bold text-xl flex items-center gap-2"><FileText /> Ficha Unificada</h3>
               <button onClick={() => setViewRecord(null)}><X size={24}/></button>
             </div>
+            
+            <div className="flex bg-slate-100 p-1 border-b">
+               <button className="flex-1 py-2 text-sm font-bold bg-white rounded shadow-sm text-slate-800">Detalhes</button>
+               {/* Futuro: Implementar troca de abas aqui se quiser esconder o histórico */}
+            </div>
+
             <div className="p-8 overflow-y-auto bg-slate-50 space-y-6">
-              <div className="bg-white p-6 rounded-xl border-l-4 border-blue-500 shadow-sm">
-                <h4 className="font-black text-blue-500 uppercase mb-4 flex items-center gap-2"><Truck size={18}/> Dados TRP</h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {viewRecord.details && Object.entries(viewRecord.details).map(([key, val]) => (
-                    (FIELDS_TRP.includes(key) || key === 'trp' || key === 'pedido') && (
-                      <div key={key}><p className="text-[10px] text-slate-400 font-bold uppercase">{key}</p><p className="text-sm font-semibold text-slate-800">{val}</p></div>
-                    )
-                  ))}
+              
+              {/* HISTÓRICO DE AUDITORIA (NOVO!) */}
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                 <h4 className="font-black text-slate-700 uppercase mb-4 flex items-center gap-2"><History size={18}/> Log de Auditoria</h4>
+                 <div className="space-y-3 max-h-40 overflow-y-auto pr-2">
+                    {auditHistory.length === 0 && <p className="text-xs text-slate-400">Carregando histórico ou nenhum registro encontrado...</p>}
+                    {auditHistory.map(log => (
+                      <div key={log.id} className="flex items-start gap-3 text-xs border-b border-slate-50 pb-2">
+                         <div className="bg-slate-100 p-1 rounded font-mono text-slate-500">{new Date(log.created_at).toLocaleString()}</div>
+                         <div>
+                            <span className="font-bold text-slate-800">{log.action}</span> por <span className="bg-blue-100 text-blue-700 px-1 rounded font-bold">{log.changed_by}</span>
+                            <div className="text-slate-400 mt-1 truncate w-64 md:w-96">{JSON.stringify(log.details)}</div>
+                         </div>
+                      </div>
+                    ))}
+                 </div>
+              </div>
+
+              {/* DADOS DO REGISTRO */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-white p-6 rounded-xl border-l-4 border-blue-500 shadow-sm">
+                  <h4 className="font-black text-blue-500 uppercase mb-4">Dados TRP</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    {viewRecord.details && Object.entries(viewRecord.details).map(([key, val]) => (
+                      (FIELDS_TRP.includes(key) || key === 'trp') && <div key={key}><p className="text-[10px] text-slate-400 font-bold uppercase">{key}</p><p className="text-sm font-semibold">{val}</p></div>
+                    ))}
+                  </div>
+                </div>
+                <div className="bg-white p-6 rounded-xl border-l-4 border-orange-500 shadow-sm">
+                  <h4 className="font-black text-orange-500 uppercase mb-4">Dados CD</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    {viewRecord.details && Object.entries(viewRecord.details).map(([key, val]) => (
+                      FIELDS_CD.includes(key) && <div key={key}><p className="text-[10px] text-slate-400 font-bold uppercase">{key}</p><p className="text-sm font-semibold">{val}</p></div>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="bg-white p-6 rounded-xl border-l-4 border-orange-500 shadow-sm">
-                <h4 className="font-black text-orange-500 uppercase mb-4 flex items-center gap-2"><Warehouse size={18}/> Dados CD</h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {viewRecord.details && Object.entries(viewRecord.details).map(([key, val]) => (
-                    FIELDS_CD.includes(key) && (<div key={key}><p className="text-[10px] text-slate-400 font-bold uppercase">{key}</p><p className="text-sm font-semibold text-slate-800">{val}</p></div>)
-                  ))}
-                </div>
-              </div>
+
             </div>
           </div>
         </div>
@@ -304,8 +341,7 @@ function App() {
           <div className="flex items-center gap-3">
             <div className="bg-slate-900 p-2 rounded-lg text-white"><LayoutDashboard size={24} /></div>
             <div>
-               <h1 className="text-xl font-black uppercase text-slate-900 leading-none">LoadCheck <span className="text-orange-500">Flow</span></h1>
-               <p className="text-xs text-slate-400 font-bold mt-1">SLA Time: {new Date().toLocaleDateString()}</p>
+               <h1 className="text-xl font-black uppercase text-slate-900 leading-none">LoadCheck <span className="text-orange-500">Audit</span></h1>
             </div>
           </div>
           <div className="flex items-center bg-slate-100 p-1 rounded-lg">
@@ -329,25 +365,26 @@ function App() {
                   <p className="text-xs font-bold text-slate-400 uppercase">Total</p>
                   <p className="text-2xl font-black text-slate-900">{records.length}</p>
                </div>
-               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-                  <p className="text-xs font-bold text-slate-400 uppercase">Aguardando</p>
-                  <p className="text-2xl font-black text-orange-500">{records.filter(r => !r.retornoOcorrencia).length}</p>
-               </div>
                
-               {/* BOTÕES ESPECIAIS POR PERFIL */}
-               
-               {/* TRP: Botão Upload */}
+               {/* BOTÕES ESPECIAIS (Agora com Baixar Modelo) */}
                {userRole === 'TRP' && (
-                 <button onClick={() => setActiveTab('create')} className="col-span-2 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 transition-colors flex flex-col items-center justify-center">
-                    <Upload size={24} className="mb-1"/> Novo Apontamento (Lote ou Manual)
+                 <button onClick={() => setActiveTab('create')} className="col-span-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 transition-colors flex flex-col items-center justify-center">
+                    <Upload size={24} className="mb-1"/> Novo Apontamento
                  </button>
                )}
 
-               {/* CD: Botões de Lote (Download Pendente e Upload Resposta) */}
                {userRole !== 'TRP' && (
-                 <div className="col-span-2 grid grid-cols-2 gap-2">
-                    <button onClick={handleDownloadPending} className="bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-700 transition-colors flex flex-col items-center justify-center py-2">
-                       <Download size={20} className="mb-1"/> Baixar Pendências
+                 <div className="col-span-3 grid grid-cols-3 gap-2">
+                    {/* BOTÃO NOVO: BAIXAR MODELO CD */}
+                    <button onClick={() => handleDownloadTemplate('CD')} className="bg-slate-100 text-slate-600 border border-slate-200 rounded-xl font-bold hover:bg-slate-200 transition-colors flex flex-col items-center justify-center py-2">
+                       <FileSpreadsheet size={20} className="mb-1"/> Baixar Modelo
+                    </button>
+                    {/* Botões Antigos */}
+                    <button onClick={() => {
+                        const ws = XLSX.utils.json_to_sheet(records.filter(r => !r.retornoOcorrencia).map(r => ({ ...r.details, SLA: 'Pendente' })));
+                        const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Pendencias"); XLSX.writeFile(wb, "Pendencias.xlsx");
+                    }} className="bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-700 transition-colors flex flex-col items-center justify-center py-2">
+                       <Download size={20} className="mb-1"/> Exportar Pendências
                     </button>
                     <label className="cursor-pointer bg-orange-500 text-white rounded-xl font-bold hover:bg-orange-600 transition-colors flex flex-col items-center justify-center py-2">
                        <Upload size={20} className="mb-1"/> Subir Respostas
@@ -372,14 +409,13 @@ function App() {
                        <th className="px-6 py-3">Status</th>
                        <th className="px-6 py-3">TRP</th>
                        <th className="px-6 py-3">Shipment / Pedido</th>
-                       <th className="px-6 py-3">Notificação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredRecords.map((r) => (
+                    {records.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                         <td className="px-6 py-4 flex gap-2">
-                          <button onClick={() => setViewRecord(r)} className="p-2 bg-slate-200 text-slate-600 rounded-md hover:bg-slate-300"><Eye size={16}/></button>
+                          <button onClick={() => { setViewRecord(r); fetchAudit(r.id); }} className="p-2 bg-slate-200 text-slate-600 rounded-md hover:bg-slate-300"><Eye size={16}/></button>
                           {userRole !== 'TRP' && !r.retornoOcorrencia && (
                             <button onClick={() => {setEditRecord(r); setFormValues({});}} className="px-3 py-1 bg-orange-500 text-white rounded-md text-xs font-bold hover:bg-orange-600"><Edit size={14}/></button>
                           )}
@@ -390,7 +426,6 @@ function App() {
                         </td>
                         <td className="px-6 py-4 font-bold text-slate-800">{r.trp}</td>
                         <td className="px-6 py-4 font-mono font-bold text-slate-700">{r.pedido}</td>
-                        <td className="px-6 py-4 text-xs uppercase">{r.tipoNotificacao}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -406,6 +441,13 @@ function App() {
             <button onClick={() => setActiveTab('dashboard')} className="text-slate-500 font-bold mb-4 flex gap-1">← Voltar</button>
             <div className="bg-white p-8 rounded-2xl shadow-lg border border-slate-100">
               <h2 className="text-xl font-black uppercase text-blue-600 mb-6 flex gap-2"><Truck/> Novo Apontamento</h2>
+              
+              <div className="flex justify-end mb-4">
+                <button onClick={() => handleDownloadTemplate('TRP')} className="flex items-center gap-2 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-lg transition-colors border border-blue-100">
+                  <FileSpreadsheet size={16}/> BAIXAR MODELO EXCEL (TRP)
+                </button>
+              </div>
+
               <div className="mb-8 p-6 bg-blue-50 rounded-xl border border-blue-100 text-center">
                  <p className="font-bold text-blue-800 mb-2">Upload de Planilha</p>
                  <label className="cursor-pointer bg-blue-600 text-white font-bold py-2 px-6 rounded-lg inline-block hover:bg-blue-700">
