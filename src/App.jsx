@@ -4,7 +4,7 @@ import {
   Truck, Upload, LayoutDashboard, CheckCircle, Clock, 
   Eye, X, Edit, Save, Download, 
   FileSpreadsheet, LogOut, Shield, Users, Lock, ChevronLeft, ChevronRight,
-  MapPin, AlertOctagon, History
+  PieChart as PieIcon, BarChart3, AlertTriangle, History, MapPin, AlertOctagon, FileText
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -14,35 +14,30 @@ const supabaseUrl = 'https://ofurvromibbqgzbvzbsx.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9mdXJ2cm9taWJicWd6YnZ6YnN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTc5MjEsImV4cCI6MjA4NDA3MzkyMX0.JufTH0lwnu_LXzqsUTP3jly2GQoUc4Kjy-LT_lbtbk0';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- REGRAS DE NEGÓCIO ---
-// Status que BLOQUEIAM a edição (No Rollback)
+// --- REGRAS DE STATUS ---
 const LOCKED_STATUSES = ['FINALIZADO', 'PROCEDENTE', 'IMPROCEDENTE', 'ACORDADO'];
 
-// --- DEFINIÇÃO DAS COLUNAS POR TIME ---
+// --- COLUNAS ---
 const ALL_COLUMNS_ORDERED = [
-  // TRP (Criação)
   'TRANSPORTADORA', 'FILIAL ORIGEM', 'PLACA VEÍCULO', 'SHIPMENT', 
   'TIPO DE NOTIFICAÇÂO', 'Nº CX - FALTA/SOBRA', 'DTS', 'REMESSA', 
   'NF', 'PEDIDO', 'FILIAL DESTINO', 'DATA DESCARGA', 'ENVIADO PARA ANÁLISE', 
   'HORA', 'TP CONSULTORA', 'JUST. ACEITA - TRP?', 'OBSERVAÇÃO TRP',
-  // CD (Análise Operacional)
   'CÓD T', 'CENTRO (PA LIGHT)', 'ORDEM DE VENDA (PA LIGHT)', 'RETORNO DA OCORRÊNCIA',
   'HORARIO DO RETORNO', 'PROBLEMA', 'SITUAÇÃO', 'RESOLUÇÃO', 
   'OFENSOR MACRO', 'OFENSOR MICRO', 'CAUSA', 'TEMPO', 'RESPONSÁVEL', 'ANALISADO POR:', 
   'ID FATURISTA', 'OCORRÊNCIA', 'CD', 'AGUARDANDO RETORNO',
-  // REGIONAL (Validação / Pitaco)
   'VALIDAÇÃO REGIONAL', 'PARECER REGIONAL', 'OBSERVAÇÃO GERAL', 
   'Analise Retroativa', 'JUST. ACEITA - CD?', 'JUST. ACEITA - NATURA?', 'VALIDADO POR:'
 ];
 
 const FIELDS_TRP = ALL_COLUMNS_ORDERED.slice(0, 17);
 const FIELDS_CD = ALL_COLUMNS_ORDERED.slice(17, 36);
-const FIELDS_REGIONAL = ALL_COLUMNS_ORDERED.slice(36); // Campos novos da Regional
-
+const FIELDS_REGIONAL = ALL_COLUMNS_ORDERED.slice(36);
 const REQUIRED_FIELDS_RESPONSE = ['SHIPMENT', 'RETORNO DA OCORRÊNCIA'];
 
 // --- LOGIN ---
-const Login = ({ onLogin }) => {
+const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -51,14 +46,12 @@ const Login = ({ onLogin }) => {
   const handleAuth = async (e) => {
     e.preventDefault();
     setLoading(true);
-    let result;
     if (isSignUp) {
-      result = await supabase.auth.signUp({ email, password });
-      if (result.error) alert(result.error.message);
-      else alert("Conta criada! Aguarde liberação.");
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) alert(error.message); else alert("Conta criada! Aguarde liberação.");
     } else {
-      result = await supabase.auth.signInWithPassword({ email, password });
-      if (result.error) alert(result.error.message);
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) alert(error.message);
     }
     setLoading(false);
   };
@@ -76,7 +69,7 @@ const Login = ({ onLogin }) => {
         <form onSubmit={handleAuth} className="space-y-4">
           <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label><input type="email" required className="w-full p-3 border border-slate-200 rounded-lg font-bold" value={email} onChange={e => setEmail(e.target.value)} /></div>
           <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Senha</label><input type="password" required className="w-full p-3 border border-slate-200 rounded-lg font-bold" value={password} onChange={e => setPassword(e.target.value)} /></div>
-          <button disabled={loading} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:scale-[1.01] transition-transform shadow-lg">{loading ? '...' : isSignUp ? 'Criar Conta' : 'Acessar'}</button>
+          <button disabled={loading} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:scale-[1.01] transition-transform shadow-lg">{loading ? 'Carregando...' : isSignUp ? 'Criar Conta' : 'Acessar'}</button>
         </form>
         <button onClick={() => setIsSignUp(!isSignUp)} className="w-full mt-4 text-xs font-bold text-slate-400">{isSignUp ? 'Voltar para Login' : 'Criar nova conta'}</button>
       </div>
@@ -107,40 +100,55 @@ const AdminPanel = () => {
 function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [processingBatch, setProcessingBatch] = useState(false);
   
-  // PAGINAÇÃO / FILTROS
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(100);
   const [totalCount, setTotalCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
   const [adminEntityFilter, setAdminEntityFilter] = useState('');
 
-  // Modais
   const [viewRecord, setViewRecord] = useState(null);
   const [auditHistory, setAuditHistory] = useState([]); 
   const [editRecord, setEditRecord] = useState(null);
   const [formValues, setFormValues] = useState({});
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); if (session) fetchProfile(session.user.id); });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => { setSession(session); if (session) fetchProfile(session.user.id); });
+    const initAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      setSession(session);
+      if (session) await fetchProfile(session.user.id);
+      else setProfileLoading(false);
+    };
+    initAuth();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setSession(session);
+      if (session) await fetchProfile(session.user.id);
+      else { setProfile(null); setProfileLoading(false); }
+    });
     return () => subscription.unsubscribe();
   }, []);
 
   const fetchProfile = async (userId) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    setProfile(data);
+    try {
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      if (error) throw error;
+      setProfile(data);
+    } catch (error) {
+      console.error("Erro perfil:", error);
+    } finally {
+      setProfileLoading(false);
+    }
   };
 
   const fetchRecords = async (resetPage = false) => {
     setLoading(true);
     const currentPage = resetPage ? 1 : page;
     if (resetPage) setPage(1);
-
     const from = (currentPage - 1) * rowsPerPage;
     const to = from + rowsPerPage - 1;
 
@@ -151,7 +159,6 @@ function App() {
     }
 
     query = query.order('created_at', { ascending: false }).range(from, to);
-
     const { data, count, error } = await query;
     if (!error) { setRecords(data || []); setTotalCount(count || 0); }
     setLoading(false);
@@ -168,7 +175,7 @@ function App() {
     await supabase.from('audit_logs').insert([{ record_id: recordId, action: actionType, changed_by: profile.email, details: changedData }]);
   };
 
-  // --- CHART HELPERS ---
+  // --- HELPERS ---
   const getChartData = () => {
     const trpCount = {};
     records.forEach(r => { const trp = r.trp || 'N/I'; trpCount[trp] = (trpCount[trp] || 0) + 1; });
@@ -182,18 +189,15 @@ function App() {
   };
 
   const isLocked = (record) => {
-    // SE O STATUS FOR UM DOS FINAIS, TRAVA TUDO
     return LOCKED_STATUSES.includes((record.retornoOcorrencia || '').toUpperCase());
   };
 
   const handleDownloadTemplate = (type) => {
     let fields = [];
     let fileName = "";
-    
     if (type === 'TRP') { fields = FIELDS_TRP; fileName = "Modelo_TRP.xlsx"; }
     else if (type === 'CD') { fields = FIELDS_CD; fileName = "Modelo_CD.xlsx"; }
     else if (type === 'REGIONAL') { fields = FIELDS_REGIONAL; fileName = "Modelo_Regional.xlsx"; }
-
     const ws = XLSX.utils.json_to_sheet([{}], { header: fields });
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Modelo"); XLSX.writeFile(wb, fileName);
   };
@@ -213,18 +217,12 @@ function App() {
 
   const handleUpdate = async () => {
     if (!editRecord) return;
-    
-    // VERIFICAÇÃO DE SEGURANÇA NO ROLLBACK
-    if (isLocked(editRecord)) return alert("ERRO: Este registro já foi finalizado e não pode ser alterado.");
-
+    if (isLocked(editRecord)) return alert("ERRO: Registro finalizado e bloqueado.");
     const currentDetails = editRecord.details || {}; const newDetails = { ...currentDetails, ...formValues };
     const updateData = { details: newDetails }; 
-    
-    // Se a coluna de status for preenchida, atualiza o status vital
     if (formValues['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = formValues['RETORNO DA OCORRÊNCIA'];
-    
     const { error } = await supabase.from('logistics_records').update(updateData).eq('id', editRecord.id);
-    if (!error) { await logAction(editRecord.id, 'ATUALIZACAO', { role: profile.role, fields: formValues }); alert('Salvo com sucesso!'); setEditRecord(null); setFormValues({}); fetchRecords(); } 
+    if (!error) { await logAction(editRecord.id, 'ATUALIZACAO', { role: profile.role, fields: formValues }); alert('Salvo!'); setEditRecord(null); setFormValues({}); fetchRecords(); } 
     else { alert('Erro: ' + error.message); }
   };
 
@@ -254,23 +252,14 @@ function App() {
         if (validationError) break;
       }
       if (validationError) { setProcessingBatch(false); alert("⛔ BLOQUEADO: " + validationError); return; }
-      
-      let updatedCount = 0;
-      let lockedCount = 0;
-      
+      let updatedCount = 0; let lockedCount = 0;
       for (const row of excelRows) {
         const searchKey = row['SHIPMENT'] || row['PEDIDO'];
         if (searchKey) {
           const { data: existingRecords } = await supabase.from('logistics_records').select('*').eq('pedido', String(searchKey)).limit(1);
           if (existingRecords && existingRecords.length > 0) {
             const record = existingRecords[0];
-            
-            // VERIFICA SE ESTÁ TRAVADO
-            if (isLocked(record)) {
-                lockedCount++;
-                continue; // Pula este registro
-            }
-
+            if (isLocked(record)) { lockedCount++; continue; }
             const mergedDetails = { ...record.details, ...row };
             const updatePayload = { details: mergedDetails }; if (row['RETORNO DA OCORRÊNCIA']) updatePayload.retornoOcorrencia = row['RETORNO DA OCORRÊNCIA'];
             await supabase.from('logistics_records').update(updatePayload).eq('id', record.id);
@@ -278,9 +267,7 @@ function App() {
           }
         }
       }
-      setProcessingBatch(false); 
-      alert(`Processamento Finalizado!\n\n✅ Atualizados: ${updatedCount}\n🔒 Bloqueados (Já finalizados): ${lockedCount}`); 
-      fetchRecords();
+      setProcessingBatch(false); alert(`Finalizado!\n✅ Atualizados: ${updatedCount}\n🔒 Bloqueados: ${lockedCount}`); fetchRecords();
     }; reader.readAsBinaryString(file);
   };
 
@@ -292,26 +279,23 @@ function App() {
     return ((details['PEDIDO'] || '').toString().toLowerCase().includes(term) || (details['SHIPMENT'] || '').toString().toLowerCase().includes(term) || (r.trp || '').toLowerCase().includes(term));
   });
 
+  // --- RENDERIZAÇÃO SEGURA ---
+  if (profileLoading) return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Carregando Perfil...</div>;
   if (!session) return <Login />;
-  if (!profile) return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Carregando...</div>;
+  if (!profile) return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Erro: Perfil não encontrado. Contate o suporte.</div>;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-20">
       
       {processingBatch && <div className="fixed inset-0 bg-black/80 z-[60] flex flex-col items-center justify-center text-white"><div className="animate-spin rounded-full h-16 w-16 border-b-4 border-orange-500 mb-4"></div><h2 className="text-xl font-bold">Processando...</h2></div>}
       
-      {/* MODAL RESPONDER (DINÂMICO POR ROLE) */}
       {editRecord && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in-95">
           <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-            <div className="bg-orange-500 p-6 flex justify-between items-center text-white">
-               <h3 className="font-bold text-xl flex items-center gap-2"><Edit /> Responder ({profile.role})</h3>
-               <button onClick={() => {setEditRecord(null); setFormValues({});}}><X size={24}/></button>
-            </div>
+            <div className="bg-orange-500 p-6 flex justify-between items-center text-white"><h3 className="font-bold text-xl flex items-center gap-2"><Edit /> Responder ({profile.role})</h3><button onClick={() => {setEditRecord(null); setFormValues({});}}><X size={24}/></button></div>
             <div className="p-6 overflow-y-auto bg-slate-50">
               <div className="bg-white p-4 rounded-xl border border-orange-200 shadow-sm">
                 <h4 className="text-sm font-bold text-orange-600 uppercase mb-4">Preencher Campos</h4>
-                {/* MOSTRA CAMPOS DIFERENTES DEPENDENDO DE QUEM LOGOU */}
                 {(profile.role === 'CD' || profile.role === 'ADMIN') && renderFormFields(FIELDS_CD)}
                 {profile.role === 'REGIONAL' && renderFormFields(FIELDS_REGIONAL)}
               </div>
@@ -321,58 +305,16 @@ function App() {
         </div>
       )}
 
-      {/* --- MODAL DE VISUALIZAÇÃO UNIFICADA (3 BLOCOS) --- */}
       {viewRecord && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in-95">
           <div className="bg-white w-full max-w-7xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-            <div className="bg-slate-900 p-6 flex justify-between items-center text-white">
-              <h3 className="font-bold text-xl flex items-center gap-2"><FileText /> Detalhes do Registro {isLocked(viewRecord) && <span className="bg-red-500 text-white text-[10px] px-2 py-1 rounded">FINALIZADO</span>}</h3>
-              <button onClick={() => setViewRecord(null)}><X size={24}/></button>
-            </div>
-            
+            <div className="bg-slate-900 p-6 flex justify-between items-center text-white"><h3 className="font-bold text-xl flex items-center gap-2"><FileText /> Detalhes {isLocked(viewRecord) && <span className="bg-red-500 text-white text-[10px] px-2 py-1 rounded">FINALIZADO</span>}</h3><button onClick={() => setViewRecord(null)}><X size={24}/></button></div>
             <div className="p-8 overflow-y-auto bg-slate-50 space-y-6">
-              
-              {/* LOG DE AUDITORIA */}
-              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                 <h4 className="font-black text-slate-700 uppercase mb-4 flex items-center gap-2"><History size={18}/> Linha do Tempo (Auditoria)</h4>
-                 <div className="space-y-2 max-h-32 overflow-y-auto">
-                    {auditHistory.map(log => (
-                      <div key={log.id} className="text-xs border-b pb-1 flex gap-2">
-                         <span className="font-mono text-slate-500">{new Date(log.created_at).toLocaleString()}</span>
-                         <span className="font-bold bg-slate-100 px-1 rounded">{log.action}</span>
-                         <span className="text-blue-600">por {log.changed_by}</span>
-                      </div>
-                    ))}
-                 </div>
-              </div>
-
-              {/* GRID DE CARDS COLORIDOS */}
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><h4 className="font-black text-slate-700 uppercase mb-4 flex items-center gap-2"><History size={18}/> Linha do Tempo</h4><div className="space-y-2 max-h-32 overflow-y-auto">{auditHistory.map(log => (<div key={log.id} className="text-xs border-b pb-1 flex gap-2"><span className="font-mono text-slate-500">{new Date(log.created_at).toLocaleString()}</span><span className="font-bold bg-slate-100 px-1 rounded">{log.action}</span><span className="text-blue-600">por {log.changed_by}</span></div>))}</div></div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                
-                {/* 1. SEÇÃO AZUL: TRP */}
-                <div className="bg-white rounded-xl shadow-sm border-t-4 border-blue-500 overflow-hidden">
-                  <div className="bg-blue-50 p-3 border-b border-blue-100"><h4 className="font-black text-blue-800 uppercase flex items-center gap-2"><Truck size={16}/> Transportadora</h4></div>
-                  <div className="p-4 grid grid-cols-1 gap-3">
-                    {FIELDS_TRP.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}
-                  </div>
-                </div>
-
-                {/* 2. SEÇÃO LARANJA: CD (OPERACIONAL) */}
-                <div className="bg-white rounded-xl shadow-sm border-t-4 border-orange-500 overflow-hidden">
-                  <div className="bg-orange-50 p-3 border-b border-orange-100"><h4 className="font-black text-orange-800 uppercase flex items-center gap-2"><AlertOctagon size={16}/> CD (Operacional)</h4></div>
-                  <div className="p-4 grid grid-cols-1 gap-3">
-                    {FIELDS_CD.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}
-                  </div>
-                </div>
-
-                {/* 3. SEÇÃO VERDE: REGIONAL (TÁTICO) - MUDEI A COR PARA DIFERENCIAR DA ANTERIOR */}
-                <div className="bg-white rounded-xl shadow-sm border-t-4 border-emerald-500 overflow-hidden">
-                  <div className="bg-emerald-50 p-3 border-b border-emerald-100"><h4 className="font-black text-emerald-800 uppercase flex items-center gap-2"><MapPin size={16}/> Regional (Validação)</h4></div>
-                  <div className="p-4 grid grid-cols-1 gap-3">
-                    {FIELDS_REGIONAL.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}
-                  </div>
-                </div>
-
+                <div className="bg-white rounded-xl shadow-sm border-t-4 border-blue-500 overflow-hidden"><div className="bg-blue-50 p-3 border-b border-blue-100"><h4 className="font-black text-blue-800 uppercase flex items-center gap-2"><Truck size={16}/> TRP</h4></div><div className="p-4 grid grid-cols-1 gap-3">{FIELDS_TRP.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}</div></div>
+                <div className="bg-white rounded-xl shadow-sm border-t-4 border-orange-500 overflow-hidden"><div className="bg-orange-50 p-3 border-b border-orange-100"><h4 className="font-black text-orange-800 uppercase flex items-center gap-2"><AlertOctagon size={16}/> CD</h4></div><div className="p-4 grid grid-cols-1 gap-3">{FIELDS_CD.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}</div></div>
+                <div className="bg-white rounded-xl shadow-sm border-t-4 border-emerald-500 overflow-hidden"><div className="bg-emerald-50 p-3 border-b border-emerald-100"><h4 className="font-black text-emerald-800 uppercase flex items-center gap-2"><MapPin size={16}/> REGIONAL</h4></div><div className="p-4 grid grid-cols-1 gap-3">{FIELDS_REGIONAL.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}</div></div>
               </div>
             </div>
           </div>
@@ -393,90 +335,32 @@ function App() {
         </div>
       </header>
 
-      {/* MAIN */}
       {activeTab === 'admin' && profile.role === 'ADMIN' ? <AdminPanel /> : (
         <main className="max-w-[98%] mx-auto p-4 mt-2">
-          
           {activeTab === 'dashboard' && (
             <div className="space-y-4 animate-in fade-in">
-              
-              {/* --- DASHBOARD GRÁFICO --- */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                 <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-                    <div className="flex justify-between items-center">
-                       <div><p className="text-xs font-bold text-slate-400 uppercase">Total Visível</p><p className="text-2xl font-black text-slate-900">{totalCount}</p></div>
-                       <div className="bg-blue-50 p-3 rounded-lg"><Truck size={20} className="text-blue-600"/></div>
-                    </div>
-                 </div>
-                 <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-                    <div className="flex justify-between items-center">
-                       <div><p className="text-xs font-bold text-slate-400 uppercase">Em Aberto</p><p className="text-2xl font-black text-orange-500">{records.filter(r => !r.retornoOcorrencia).length}</p></div>
-                       <div className="bg-orange-50 p-3 rounded-lg"><Clock size={20} className="text-orange-600"/></div>
-                    </div>
-                 </div>
-
-                 <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 h-28 flex items-center">
-                    <ResponsiveContainer width="100%" height="100%">
-                       <PieChart>
-                          <Pie data={getStatusData()} cx="50%" cy="50%" innerRadius={25} outerRadius={40} paddingAngle={5} dataKey="value">
-                             {getStatusData().map((entry, index) => (<Cell key={`cell-${index}`} fill={index === 0 ? '#10b981' : '#f97316'} />))}
-                          </Pie>
-                          <Tooltip />
-                       </PieChart>
-                    </ResponsiveContainer>
-                    <div className="text-[10px] font-bold text-slate-400 mr-4">STATUS</div>
-                 </div>
-
-                 <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 h-28 flex items-center">
-                    <ResponsiveContainer width="100%" height="100%">
-                       <BarChart data={getChartData()}><XAxis dataKey="name" hide /><Tooltip /><Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 4, 4]} /></BarChart>
-                    </ResponsiveContainer>
-                    <div className="text-[10px] font-bold text-slate-400 mr-4">VOLUME</div>
-                 </div>
+                 <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100"><div className="flex justify-between items-center"><div><p className="text-xs font-bold text-slate-400 uppercase">Total Visível</p><p className="text-2xl font-black text-slate-900">{totalCount}</p></div><div className="bg-blue-50 p-3 rounded-lg"><Truck size={20} className="text-blue-600"/></div></div></div>
+                 <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100"><div className="flex justify-between items-center"><div><p className="text-xs font-bold text-slate-400 uppercase">Pendentes</p><p className="text-2xl font-black text-orange-500">{records.filter(r => !r.retornoOcorrencia).length}</p></div><div className="bg-orange-50 p-3 rounded-lg"><Clock size={20} className="text-orange-600"/></div></div></div>
+                 <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 h-28 flex items-center"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={getStatusData()} cx="50%" cy="50%" innerRadius={25} outerRadius={40} paddingAngle={5} dataKey="value">{getStatusData().map((entry, index) => (<Cell key={`cell-${index}`} fill={index === 0 ? '#10b981' : '#f97316'} />))}</Pie><Tooltip /></PieChart></ResponsiveContainer><div className="text-[10px] font-bold text-slate-400 mr-4">STATUS</div></div>
+                 <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 h-28 flex items-center"><ResponsiveContainer width="100%" height="100%"><BarChart data={getChartData()}><XAxis dataKey="name" hide /><Tooltip /><Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 4, 4]} /></BarChart></ResponsiveContainer><div className="text-[10px] font-bold text-slate-400 mr-4">VOLUME</div></div>
               </div>
 
-              {/* BARRA DE COMANDOS */}
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
-                 {profile.role === 'ADMIN' && (
-                   <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200">
-                      <Eye className="text-purple-600" size={16} />
-                      <input type="text" placeholder="Emular (Ex: PATRUS)" className="bg-transparent text-sm font-bold text-slate-700 outline-none w-48" value={adminEntityFilter} onChange={e => setAdminEntityFilter(e.target.value)} />
-                      {adminEntityFilter && <button onClick={() => setAdminEntityFilter('')} className="text-slate-400 hover:text-red-500"><X size={14}/></button>}
-                   </div>
-                 )}
-
-                 <div className="relative w-full md:w-96">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16}/>
-                    <input type="text" placeholder="Filtrar nesta página..." className="w-full pl-10 pr-4 py-3 rounded-lg border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-                 </div>
-
+                 {profile.role === 'ADMIN' && (<div className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200"><Eye className="text-purple-600" size={16} /><input type="text" placeholder="Emular (Ex: PATRUS)" className="bg-transparent text-sm font-bold text-slate-700 outline-none w-48" value={adminEntityFilter} onChange={e => setAdminEntityFilter(e.target.value)} />{adminEntityFilter && <button onClick={() => setAdminEntityFilter('')} className="text-slate-400 hover:text-red-500"><X size={14}/></button>}</div>)}
+                 <div className="relative w-full md:w-96"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16}/><input type="text" placeholder="Filtrar nesta página..." className="w-full pl-10 pr-4 py-3 rounded-lg border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
                  <div className="flex gap-2">
                    {profile.role === 'TRP' && <button onClick={() => setActiveTab('create')} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold text-sm hover:bg-blue-700 shadow-lg flex items-center gap-2"><Upload size={16}/> Novo</button>}
-                   
-                   {/* BOTÕES PARA CD, REGIONAL E ADMIN */}
-                   {(profile.role !== 'TRP') && (
-                     <>
-                       <div className="flex gap-1">
-                          <button onClick={() => handleDownloadTemplate(profile.role)} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-l-lg font-bold text-xs hover:bg-slate-200 border border-r-0">Modelo {profile.role}</button>
-                          <label className="cursor-pointer bg-orange-500 text-white px-4 py-2 rounded-r-lg font-bold text-xs hover:bg-orange-600 shadow-lg flex items-center gap-2"><Upload size={16}/> Subir Respostas <input type="file" className="hidden" onChange={handleBatchUpdate} /></label>
-                       </div>
-                     </>
-                   )}
+                   {(profile.role !== 'TRP') && (<div className="flex gap-1"><button onClick={() => handleDownloadTemplate(profile.role)} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-l-lg font-bold text-xs hover:bg-slate-200 border border-r-0">Modelo {profile.role}</button><label className="cursor-pointer bg-orange-500 text-white px-4 py-2 rounded-r-lg font-bold text-xs hover:bg-orange-600 shadow-lg flex items-center gap-2"><Upload size={16}/> Subir Respostas <input type="file" className="hidden" onChange={handleBatchUpdate} /></label></div>)}
                  </div>
               </div>
 
-              {/* GRID */}
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[65vh]">
                 <div className="overflow-auto flex-1 relative">
                   {loading && <div className="absolute inset-0 bg-white/80 z-50 flex items-center justify-center font-bold text-slate-500">Carregando dados...</div>}
                   <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
                     <thead className="bg-slate-100 text-slate-500 font-bold uppercase sticky top-0 z-20 shadow-sm">
-                      <tr>
-                         <th className="px-4 py-3 sticky left-0 bg-slate-100 z-30 border-r border-slate-200 shadow-md">Ações</th>
-                         <th className="px-4 py-3 sticky left-[80px] bg-slate-100 z-30 border-r border-slate-200">Status</th>
-                         <th className="px-4 py-3 sticky left-[180px] bg-slate-100 z-30 border-r border-slate-200 shadow-md">ID / Data</th>
-                         {ALL_COLUMNS_ORDERED.map(col => (<th key={col} className="px-4 py-3 border-r border-slate-200 min-w-[150px]">{col}</th>))}
-                      </tr>
+                      <tr><th className="px-4 py-3 sticky left-0 bg-slate-100 z-30 border-r border-slate-200 shadow-md">Ações</th><th className="px-4 py-3 sticky left-[80px] bg-slate-100 z-30 border-r border-slate-200">Status</th><th className="px-4 py-3 sticky left-[180px] bg-slate-100 z-30 border-r border-slate-200 shadow-md">ID / Data</th>{ALL_COLUMNS_ORDERED.map(col => (<th key={col} className="px-4 py-3 border-r border-slate-200 min-w-[150px]">{col}</th>))}</tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {filteredRecords.map((r, idx) => {
@@ -484,61 +368,29 @@ function App() {
                         return (
                         <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'} ${locked ? 'bg-slate-100 opacity-80' : ''}`}>
                           <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r border-slate-200 shadow-md">
-                            <div className="flex gap-1">
-                              <button onClick={() => { setViewRecord(r); fetchAudit(r.id); }} className="p-1.5 bg-slate-200 text-slate-600 rounded hover:bg-slate-300"><Eye size={14}/></button>
-                              
-                              {/* SÓ MOSTRA EDITAR SE NÃO ESTIVER TRAVADO */}
-                              {(profile.role !== 'TRP' && !locked) && (
-                                <button onClick={() => {setEditRecord(r); setFormValues({});}} className="p-1.5 bg-orange-500 text-white rounded hover:bg-orange-600"><Edit size={14}/></button>
-                              )}
-                              
-                              {/* ÍCONE DE CADEADO SE TIVER TRAVADO */}
-                              {locked && <Lock size={14} className="text-slate-400 m-1"/>}
-                            </div>
+                            <div className="flex gap-1"><button onClick={() => { setViewRecord(r); fetchAudit(r.id); }} className="p-1.5 bg-slate-200 text-slate-600 rounded hover:bg-slate-300"><Eye size={14}/></button>{(profile.role !== 'TRP' && !locked) && (<button onClick={() => {setEditRecord(r); setFormValues({});}} className="p-1.5 bg-orange-500 text-white rounded hover:bg-orange-600"><Edit size={14}/></button>)}{locked && <Lock size={14} className="text-slate-400 m-1"/>}</div>
                           </td>
-                          <td className="px-4 py-2 sticky left-[80px] bg-white z-10 border-r border-slate-200">
-                             {r.retornoOcorrencia ? <span className="text-green-600 font-bold flex gap-1 items-center"><CheckCircle size={12}/> {r.retornoOcorrencia}</span> : <span className="text-orange-500 font-bold flex gap-1 items-center"><Clock size={12}/> Pendente</span>}
-                          </td>
-                          <td className="px-4 py-2 sticky left-[180px] bg-white z-10 border-r border-slate-200 font-mono text-slate-400 shadow-md">
-                             #{r.id} <br/> {new Date(r.created_at).toLocaleDateString()}
-                          </td>
+                          <td className="px-4 py-2 sticky left-[80px] bg-white z-10 border-r border-slate-200">{r.retornoOcorrencia ? <span className="text-green-600 font-bold flex gap-1 items-center"><CheckCircle size={12}/> {r.retornoOcorrencia}</span> : <span className="text-orange-500 font-bold flex gap-1 items-center"><Clock size={12}/> Pend</span>}</td>
+                          <td className="px-4 py-2 sticky left-[180px] bg-white z-10 border-r border-slate-200 font-mono text-slate-400 shadow-md">#{r.id} <br/> {new Date(r.created_at).toLocaleDateString()}</td>
                           {ALL_COLUMNS_ORDERED.map(col => (<td key={col} className="px-4 py-2 border-r border-slate-100 text-slate-700 font-medium truncate max-w-[300px]" title={r.details?.[col]}>{r.details?.[col] || '-'}</td>))}
                         </tr>
                       )})}
                     </tbody>
                   </table>
                 </div>
-                
-                {/* PAGINAÇÃO */}
                 <div className="bg-white border-t border-slate-200 p-2 flex items-center justify-between text-xs font-bold text-slate-500">
-                   <div className="flex items-center gap-2">
-                      <span>Itens/pág:</span>
-                      <select value={rowsPerPage} onChange={(e) => setRowsPerPage(Number(e.target.value))} className="bg-slate-100 border border-slate-300 rounded p-1">
-                         <option value={50}>50</option><option value={100}>100</option><option value={500}>500</option>
-                      </select>
-                   </div>
-                   <div className="flex items-center gap-4">
-                      <span>{((page - 1) * rowsPerPage) + 1} - {Math.min(page * rowsPerPage, totalCount)} de {totalCount}</span>
-                      <div className="flex gap-1">
-                         <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="p-1 bg-slate-100 rounded hover:bg-slate-200 disabled:opacity-50"><ChevronLeft size={16}/></button>
-                         <button onClick={() => setPage(p => (p * rowsPerPage < totalCount ? p + 1 : p))} disabled={page * rowsPerPage >= totalCount} className="p-1 bg-slate-100 rounded hover:bg-slate-200 disabled:opacity-50"><ChevronRight size={16}/></button>
-                      </div>
-                   </div>
+                   <div className="flex items-center gap-2"><span>Itens/pág:</span><select value={rowsPerPage} onChange={(e) => setRowsPerPage(Number(e.target.value))} className="bg-slate-100 border border-slate-300 rounded p-1"><option value={50}>50</option><option value={100}>100</option><option value={500}>500</option></select></div>
+                   <div className="flex items-center gap-4"><span>{((page - 1) * rowsPerPage) + 1} - {Math.min(page * rowsPerPage, totalCount)} de {totalCount}</span><div className="flex gap-1"><button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="p-1 bg-slate-100 rounded hover:bg-slate-200 disabled:opacity-50"><ChevronLeft size={16}/></button><button onClick={() => setPage(p => (p * rowsPerPage < totalCount ? p + 1 : p))} disabled={page * rowsPerPage >= totalCount} className="p-1 bg-slate-100 rounded hover:bg-slate-200 disabled:opacity-50"><ChevronRight size={16}/></button></div></div>
                 </div>
               </div>
             </div>
           )}
-
           {activeTab === 'create' && (
             <div className="max-w-4xl mx-auto space-y-6">
               <button onClick={() => setActiveTab('dashboard')} className="font-bold text-slate-500 mb-4">← Voltar</button>
               <div className="bg-white p-8 rounded-2xl shadow-lg border border-slate-100">
                 <h2 className="text-xl font-black uppercase text-blue-600 mb-6">Novo Apontamento</h2>
-                <div className="mb-6 p-6 bg-blue-50 rounded-xl border border-blue-100 text-center">
-                   <p className="font-bold text-blue-800 mb-2">Upload Rápido</p>
-                   <label className="cursor-pointer bg-blue-600 text-white font-bold py-2 px-6 rounded-lg inline-block hover:bg-blue-700">Selecionar Excel <input type="file" className="hidden" onChange={handleBatchInsert} /></label>
-                   <button onClick={() => handleDownloadTemplate('TRP')} className="ml-4 text-xs font-bold text-blue-600 underline">Baixar Modelo</button>
-                </div>
+                <div className="mb-6 p-6 bg-blue-50 rounded-xl border border-blue-100 text-center"><p className="font-bold text-blue-800 mb-2">Upload Rápido</p><label className="cursor-pointer bg-blue-600 text-white font-bold py-2 px-6 rounded-lg inline-block hover:bg-blue-700">Selecionar Excel <input type="file" className="hidden" onChange={handleBatchInsert} /></label><button onClick={() => handleDownloadTemplate('TRP')} className="ml-4 text-xs font-bold text-blue-600 underline">Baixar Modelo</button></div>
                 <div><p className="font-bold text-sm mb-4 uppercase text-slate-400">Ou Manual:</p>{renderFormFields(FIELDS_TRP)}<button onClick={handleCreate} className="mt-6 w-full bg-slate-900 text-white py-4 rounded-xl font-bold shadow-lg">CRIAR</button></div>
               </div>
             </div>
