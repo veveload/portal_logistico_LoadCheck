@@ -12,9 +12,9 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "lucide-react": "^0.292.0",
+    "recharts": "^2.10.1",
     "@supabase/supabase-js": "^2.39.0",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.1/xlsx-0.20.1.tgz",
-    "recharts": "^2.10.1"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.1/xlsx-0.20.1.tgz"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.0",
