@@ -4,7 +4,7 @@ import {
   Truck, Upload, LayoutDashboard, CheckCircle, Clock, 
   Eye, X, Edit, Save, Download, 
   LogOut, Shield, Users, Lock, ChevronLeft, ChevronRight,
-  MapPin, AlertOctagon, FileText, History, Search, FileSpreadsheet
+  MapPin, AlertOctagon, FileText, History, Search, FileDown
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -47,7 +47,7 @@ const Login = () => {
     try {
       if (isSignUp) {
         const { error } = await supabase.auth.signUp({ email, password });
-        if (error) alert(error.message); else alert("Conta criada! Tente logar.");
+        if (error) alert(error.message); else alert("Conta criada! Aguarde liberação.");
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) alert(error.message);
@@ -93,7 +93,7 @@ function App() {
   const [editRecord, setEditRecord] = useState(null);
   const [formValues, setFormValues] = useState({});
 
-  // --- SESSÃO E PERFIL (BYPASS ATIVO) ---
+  // --- SESSÃO E PERFIL ---
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -112,45 +112,71 @@ function App() {
 
   const fetchProfileWithBypass = async (user) => {
     setLoadingProfile(true);
-    const timeoutPromise = new Promise((resolve) => {
-      setTimeout(() => { resolve({ bypass: true }); }, 2000);
-    });
+    // Timeout para não travar
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve({ bypass: true }), 2000));
     const dbPromise = supabase.from('profiles').select('*').eq('id', user.id).single();
 
     try {
       const result = await Promise.race([dbPromise, timeoutPromise]);
       if (result.bypass || result.error || !result.data) {
-        setProfile({ id: user.id, email: user.email, role: 'ADMIN', assigned_entity: 'GLOBAL' });
+        // Fallback seguro se o banco falhar
+        setProfile({ id: user.id, email: user.email, role: 'TRP', assigned_entity: 'PENDENTE' });
       } else {
         setProfile(result.data);
       }
     } catch (e) {
-      setProfile({ email: user.email, role: 'ADMIN', assigned_entity: 'GLOBAL' });
+      setProfile({ email: user.email, role: 'TRP', assigned_entity: 'ERRO' });
     } finally {
       setLoadingProfile(false);
     }
   };
 
-  // --- DADOS ---
+  // --- DADOS (COM FILTRO DE SEGURANÇA POR PERFIL) ---
   const fetchRecords = async (resetPage = false) => {
+    if (!profile) return;
     setLoadingData(true);
-    try {
-      const currentPage = resetPage ? 1 : page;
-      if (resetPage) setPage(1);
-      const from = (currentPage - 1) * rowsPerPage;
-      const to = from + rowsPerPage - 1;
+    const currentPage = resetPage ? 1 : page;
+    if (resetPage) setPage(1);
+    
+    const from = (currentPage - 1) * rowsPerPage;
+    const to = from + rowsPerPage - 1;
 
+    try {
       let query = supabase.from('logistics_records').select('*', { count: 'exact' });
+      
+      // --- REGRAS DE FILTRAGEM (TRAVA NO BANCO) ---
+      const role = profile.role;
+      const entity = profile.assigned_entity;
+      const isSuperUser = ['ADMIN', 'BOT', 'BOV'].includes(role);
+
+      if (!isSuperUser && entity !== 'GLOBAL') {
+        if (role === 'TRP') {
+          // TRP vê apenas seus apontamentos (coluna trp)
+          query = query.ilike('trp', `%${entity}%`);
+        } else if (role === 'CD') {
+          // CD vê apenas seus centros (dentro do JSON details)
+          query = query.contains('details', { 'CENTRO (PA LIGHT)': entity });
+        } else if (role === 'REGIONAL') {
+          // Regional vê o que for da sua regional (dentro do JSON details - assumindo campo REGIONAL ou similar)
+          // Se não houver campo direto, filtramos por texto genérico no JSON para flexibilidade
+          query = query.textSearch('details', entity); 
+        }
+      }
+
       query = query.order('created_at', { ascending: false }).range(from, to);
-      const { data, count } = await query;
+      const { data, count, error } = await query;
+      if (error) throw error;
       
       setRecords(data || []);
       setTotalCount(count || 0);
-    } catch (err) { console.error(err); } 
-    finally { setLoadingData(false); }
+    } catch (err) {
+      console.error("Erro dados:", err);
+    } finally {
+      setLoadingData(false);
+    }
   };
 
-  useEffect(() => { if (!loadingProfile && session) fetchRecords(); }, [loadingProfile, session, page, rowsPerPage]);
+  useEffect(() => { if (!loadingProfile && session && profile) fetchRecords(); }, [loadingProfile, session, profile, page, rowsPerPage]);
 
   const fetchAudit = async (recordId) => {
     const { data } = await supabase.from('audit_logs').select('*').eq('record_id', recordId).order('created_at', { ascending: false });
@@ -163,6 +189,7 @@ function App() {
 
   // --- HELPERS ---
   const isLocked = (r) => LOCKED_STATUSES.includes((r.retornoOcorrencia || '').toUpperCase());
+  const isSuperUser = profile && ['ADMIN', 'BOT', 'BOV'].includes(profile.role);
   
   const getStatusData = () => {
     if (!records) return [];
@@ -178,29 +205,37 @@ function App() {
     return Object.keys(counts).slice(0, 5).map(k => ({ name: k, value: counts[k] }));
   };
 
-  // --- CORREÇÃO DO DOWNLOAD DE MODELO ---
+  // --- DOWNLOADS E EXPORTS ---
   const handleDownloadTemplate = (roleInput) => {
-    // Se for ADMIN ou undefined, assume CD como padrão
-    const role = (roleInput === 'ADMIN' || !roleInput) ? 'CD' : roleInput;
-    
+    const role = (isSuperUser || !roleInput) ? 'CD' : roleInput; // Default Admin = Modelo CD
     let fields = FIELDS_CD;
     let fileName = "Modelo_Resposta.xlsx";
 
-    if (role === 'TRP') { 
-        fields = FIELDS_TRP; 
-        fileName = "Modelo_Apontamento_TRP.xlsx"; 
-    }
-    else if (role === 'REGIONAL') { 
-        fields = FIELDS_REGIONAL; 
-        fileName = "Modelo_Regional.xlsx"; 
-    }
+    if (role === 'TRP') { fields = FIELDS_TRP; fileName = "Modelo_Apontamento_TRP.xlsx"; }
+    else if (role === 'REGIONAL') { fields = FIELDS_REGIONAL; fileName = "Modelo_Regional.xlsx"; }
 
     const ws = XLSX.utils.json_to_sheet([{}], { header: fields });
-    const wb = XLSX.utils.book_new(); 
-    XLSX.utils.book_append_sheet(wb, ws, "Modelo"); 
-    XLSX.writeFile(wb, fileName);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Modelo"); XLSX.writeFile(wb, fileName);
   };
 
+  const handleExportTable = () => {
+    if (records.length === 0) return alert("Nada para exportar.");
+    
+    // Achata o JSON details para ficar bonito no Excel
+    const flatRecords = records.map(r => ({
+        ID: r.id,
+        STATUS: r.retornoOcorrencia || 'PENDENTE',
+        CRIADO_EM: new Date(r.created_at).toLocaleString(),
+        ...r.details // Espalha as 48 colunas
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(flatRecords);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Dados_Exportados");
+    XLSX.writeFile(wb, `Exportacao_${profile.role}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  // --- AÇÕES CRUD ---
   const handleCreate = async () => {
     if (!formValues['TRANSPORTADORA'] || !formValues['SHIPMENT']) return alert("Preencha Transportadora e Shipment.");
     const vitalData = {
@@ -218,7 +253,7 @@ function App() {
 
   const handleUpdate = async () => {
     if (!editRecord) return;
-    if (isLocked(editRecord) && profile?.role !== 'ADMIN') return alert("ERRO: Registro finalizado."); 
+    if (isLocked(editRecord) && !isSuperUser) return alert("ERRO: Registro finalizado."); 
     const currentDetails = editRecord.details || {}; const newDetails = { ...currentDetails, ...formValues };
     const updateData = { details: newDetails }; 
     if (formValues['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = formValues['RETORNO DA OCORRÊNCIA'];
@@ -263,7 +298,7 @@ function App() {
            const { data: exists } = await supabase.from('logistics_records').select('*').eq('pedido', String(key)).limit(1);
            if (exists && exists[0]) {
               const rec = exists[0];
-              if (isLocked(rec) && profile?.role !== 'ADMIN') { locked++; continue; } 
+              if (isLocked(rec) && !isSuperUser) { locked++; continue; } 
               const newDetails = { ...rec.details, ...row };
               const updateData = { details: newDetails };
               if (row['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = row['RETORNO DA OCORRÊNCIA'];
@@ -290,8 +325,9 @@ function App() {
     return (d['SHIPMENT'] || '').toString().toLowerCase().includes(t) || (d['PEDIDO'] || '').toString().toLowerCase().includes(t) || (r.trp || '').toLowerCase().includes(t);
   });
 
-  const canCreate = profile?.role === 'TRP' || profile?.role === 'ADMIN';
-  const canEdit = profile?.role === 'CD' || profile?.role === 'REGIONAL' || profile?.role === 'ADMIN';
+  // PERMISSÕES VISUAIS
+  const canCreate = profile?.role === 'TRP' || isSuperUser;
+  const canEdit = profile?.role === 'CD' || profile?.role === 'REGIONAL' || isSuperUser;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-20">
@@ -306,8 +342,8 @@ function App() {
             <div className="p-6 overflow-y-auto bg-slate-50">
                <div className="bg-white p-4 rounded-xl border border-orange-200 shadow-sm">
                  <h4 className="text-sm font-bold text-orange-600 uppercase mb-4">Dados da Resposta</h4>
-                 {(profile?.role === 'CD' || profile?.role === 'ADMIN') && renderFormFields(FIELDS_CD)}
-                 {(profile?.role === 'REGIONAL' || profile?.role === 'ADMIN') && renderFormFields(FIELDS_REGIONAL)}
+                 {(profile?.role === 'CD' || isSuperUser) && renderFormFields(FIELDS_CD)}
+                 {(profile?.role === 'REGIONAL' || isSuperUser) && renderFormFields(FIELDS_REGIONAL)}
                </div>
             </div>
             <div className="p-4 border-t bg-white flex justify-end gap-2"><button onClick={() => setEditRecord(null)} className="px-6 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-lg">Cancelar</button><button onClick={handleUpdate} className="px-6 py-2 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 flex items-center gap-2"><Save size={18}/> Salvar</button></div>
@@ -336,11 +372,10 @@ function App() {
       <header className="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-10 shadow-sm flex justify-between items-center">
         <div className="flex items-center gap-3">
           <div className="bg-slate-900 p-2 rounded-lg text-white"><LayoutDashboard size={24} /></div>
-          <div><h1 className="text-xl font-black uppercase text-slate-900 leading-none">LoadCheck <span className="text-orange-500">360º</span></h1>
-             <p className="text-xs font-bold text-slate-400 mt-1">{session?.user?.email} • <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded uppercase">{profile?.role || 'Guest'}</span></p></div>
+          <div><h1 className="text-xl font-black uppercase text-slate-900 leading-none">LoadCheck <span className="text-orange-500">2.0</span></h1>
+             <p className="text-xs font-bold text-slate-400 mt-1">{session?.user?.email} • <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded uppercase">{profile?.role || 'Visitante'}</span></p></div>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-slate-100 hover:bg-slate-200"><LayoutDashboard size={16}/> Dash</button>
           <button onClick={() => supabase.auth.signOut()} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-red-50 text-red-600 hover:bg-red-100"><LogOut size={16}/> Sair</button>
         </div>
       </header>
@@ -349,8 +384,9 @@ function App() {
       <main className="max-w-[98%] mx-auto p-4 mt-2">
           {activeTab === 'dashboard' && (
             <div className="space-y-4 animate-in fade-in">
+              {/* KPIS */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                 <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100"><div className="flex justify-between items-center"><div><p className="text-xs font-bold text-slate-400 uppercase">Total Visível</p><p className="text-2xl font-black text-slate-900">{totalCount}</p></div><div className="bg-blue-50 p-3 rounded-lg"><Truck size={20} className="text-blue-600"/></div></div></div>
+                 <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100"><div className="flex justify-between items-center"><div><p className="text-xs font-bold text-slate-400 uppercase">Registros</p><p className="text-2xl font-black text-slate-900">{totalCount}</p></div><div className="bg-blue-50 p-3 rounded-lg"><Truck size={20} className="text-blue-600"/></div></div></div>
                  <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100"><div className="flex justify-between items-center"><div><p className="text-xs font-bold text-slate-400 uppercase">Pendentes</p><p className="text-2xl font-black text-orange-500">{getStatusData()[1]?.value || 0}</p></div><div className="bg-orange-50 p-3 rounded-lg"><Clock size={20} className="text-orange-600"/></div></div></div>
                  <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 h-28 flex items-center"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={getStatusData()} cx="50%" cy="50%" innerRadius={25} outerRadius={40} paddingAngle={5} dataKey="value">{getStatusData().map((entry, index) => (<Cell key={`cell-${index}`} fill={index === 0 ? '#10b981' : '#f97316'} />))}</Pie><Tooltip /></PieChart></ResponsiveContainer><div className="text-[10px] font-bold text-slate-400 mr-4">STATUS</div></div>
                  <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 h-28 flex items-center"><ResponsiveContainer width="100%" height="100%"><BarChart data={getChartData()}><XAxis dataKey="name" hide /><Tooltip /><Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 4, 4]} /></BarChart></ResponsiveContainer><div className="text-[10px] font-bold text-slate-400 mr-4">VOLUME</div></div>
@@ -360,6 +396,9 @@ function App() {
                  <div className="relative w-full md:w-96"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16}/><input type="text" placeholder="Filtrar nesta página..." className="w-full pl-10 pr-4 py-3 rounded-lg border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
                  
                  <div className="flex gap-2">
+                   {/* NOVO: BOTÃO EXPORTAR GERAL */}
+                   <button onClick={handleExportTable} className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold text-sm hover:bg-green-700 shadow-lg flex items-center gap-2"><FileDown size={16}/> Exportar Tabela</button>
+
                    {canCreate && <button onClick={() => setActiveTab('create')} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold text-sm hover:bg-blue-700 shadow-lg flex items-center gap-2"><Upload size={16}/> Novo</button>}
                    
                    {canEdit && (
@@ -384,7 +423,7 @@ function App() {
                         return (
                         <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'} ${locked ? 'bg-slate-100 opacity-80' : ''}`}>
                           <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r border-slate-200 shadow-md">
-                            <div className="flex gap-1"><button onClick={() => { setViewRecord(r); fetchAudit(r.id); }} className="p-1.5 bg-slate-200 text-slate-600 rounded hover:bg-slate-300"><Eye size={14}/></button>{(canEdit && (!locked || profile?.role === 'ADMIN')) && (<button onClick={() => {setEditRecord(r); setFormValues({});}} className="p-1.5 bg-orange-500 text-white rounded hover:bg-orange-600"><Edit size={14}/></button>)}{locked && <Lock size={14} className="text-slate-400 m-1"/>}</div>
+                            <div className="flex gap-1"><button onClick={() => { setViewRecord(r); fetchAudit(r.id); }} className="p-1.5 bg-slate-200 text-slate-600 rounded hover:bg-slate-300"><Eye size={14}/></button>{(canEdit && (!locked || isSuperUser)) && (<button onClick={() => {setEditRecord(r); setFormValues({});}} className="p-1.5 bg-orange-500 text-white rounded hover:bg-orange-600"><Edit size={14}/></button>)}{locked && <Lock size={14} className="text-slate-400 m-1"/>}</div>
                           </td>
                           <td className="px-4 py-2 sticky left-[80px] bg-white z-10 border-r border-slate-200">{r.retornoOcorrencia ? <span className="text-green-600 font-bold flex gap-1 items-center"><CheckCircle size={12}/> {r.retornoOcorrencia}</span> : <span className="text-orange-500 font-bold flex gap-1 items-center"><Clock size={12}/> Pend</span>}</td>
                           <td className="px-4 py-2 sticky left-[180px] bg-white z-10 border-r border-slate-200 font-mono text-slate-400 shadow-md">#{r.id} <br/> {new Date(r.created_at).toLocaleDateString()}</td>
