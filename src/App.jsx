@@ -4,7 +4,7 @@ import {
   Truck, Upload, LayoutDashboard, CheckCircle, Clock, 
   Eye, X, Edit, Save, Download, 
   FileSpreadsheet, LogOut, Shield, Users, Lock, ChevronLeft, ChevronRight,
-  PieChart as PieIcon, BarChart3, AlertTriangle, History, MapPin, AlertOctagon, FileText
+  MapPin, AlertOctagon, FileText, History, AlertTriangle
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -118,34 +118,46 @@ function App() {
   const [formValues, setFormValues] = useState({});
 
   useEffect(() => {
-    const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+    // Inicializa Sessão
+    supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session) await fetchProfile(session.user.id);
+      if (session) fetchProfile(session.user.id);
       else setProfileLoading(false);
-    };
-    initAuth();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session) await fetchProfile(session.user.id);
+      if (session) fetchProfile(session.user.id);
       else { setProfile(null); setProfileLoading(false); }
     });
+
     return () => subscription.unsubscribe();
   }, []);
 
   const fetchProfile = async (userId) => {
+    setProfileLoading(true);
+    // Timeout de segurança: Se travar, libera em 5s
+    const timeout = setTimeout(() => {
+        if (profileLoading) {
+            console.error("Timeout carregando perfil");
+            setProfileLoading(false);
+        }
+    }, 5000);
+
     try {
       const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      if (error) throw error;
-      setProfile(data);
+      if (data) setProfile(data);
+      else console.error("Perfil não encontrado (DB retornou vazio)");
     } catch (error) {
       console.error("Erro perfil:", error);
     } finally {
+      clearTimeout(timeout);
       setProfileLoading(false);
     }
   };
 
   const fetchRecords = async (resetPage = false) => {
+    if (!profile) return;
     setLoading(true);
     const currentPage = resetPage ? 1 : page;
     if (resetPage) setPage(1);
@@ -175,7 +187,6 @@ function App() {
     await supabase.from('audit_logs').insert([{ record_id: recordId, action: actionType, changed_by: profile.email, details: changedData }]);
   };
 
-  // --- HELPERS ---
   const getChartData = () => {
     const trpCount = {};
     records.forEach(r => { const trp = r.trp || 'N/I'; trpCount[trp] = (trpCount[trp] || 0) + 1; });
@@ -280,9 +291,22 @@ function App() {
   });
 
   // --- RENDERIZAÇÃO SEGURA ---
-  if (profileLoading) return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Carregando Perfil...</div>;
+  if (profileLoading) return (
+    <div className="flex h-screen flex-col items-center justify-center font-bold text-slate-500 gap-4">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-orange-500"></div>
+      <p>Carregando Perfil...</p>
+    </div>
+  );
+
   if (!session) return <Login />;
-  if (!profile) return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Erro: Perfil não encontrado. Contate o suporte.</div>;
+  
+  if (!profile) return (
+    <div className="flex h-screen flex-col items-center justify-center font-bold text-slate-500 gap-4">
+      <AlertTriangle size={48} className="text-red-500"/>
+      <p>Erro: Perfil de usuário não encontrado no Banco de Dados.</p>
+      <button onClick={() => supabase.auth.signOut()} className="px-4 py-2 bg-slate-900 text-white rounded">Sair e Tentar Novamente</button>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-20">
@@ -335,6 +359,7 @@ function App() {
         </div>
       </header>
 
+      {/* MAIN */}
       {activeTab === 'admin' && profile.role === 'ADMIN' ? <AdminPanel /> : (
         <main className="max-w-[98%] mx-auto p-4 mt-2">
           {activeTab === 'dashboard' && (
