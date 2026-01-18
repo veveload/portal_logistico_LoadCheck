@@ -4,7 +4,7 @@ import {
   Truck, Upload, LayoutDashboard, CheckCircle, Clock, 
   Eye, X, Edit, Save, Download, 
   LogOut, Shield, Users, Lock, ChevronLeft, ChevronRight,
-  MapPin, AlertOctagon, FileText, History, Search
+  MapPin, AlertOctagon, FileText, History, Search, FileSpreadsheet
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -93,7 +93,7 @@ function App() {
   const [editRecord, setEditRecord] = useState(null);
   const [formValues, setFormValues] = useState({});
 
-  // --- SESSÃO E PERFIL COM BYPASS (A CURA DO BUG) ---
+  // --- SESSÃO E PERFIL (BYPASS ATIVO) ---
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -112,34 +112,19 @@ function App() {
 
   const fetchProfileWithBypass = async (user) => {
     setLoadingProfile(true);
-    
-    // 1. CRONÔMETRO: Se o banco demorar 2s, assume ADMIN e entra.
     const timeoutPromise = new Promise((resolve) => {
-      setTimeout(() => {
-        console.warn("⚠️ Banco lento. Ativando Bypass de Segurança.");
-        resolve({ bypass: true });
-      }, 2000); // 2 segundos limite
+      setTimeout(() => { resolve({ bypass: true }); }, 2000);
     });
-
-    // 2. TENTATIVA REAL
     const dbPromise = supabase.from('profiles').select('*').eq('id', user.id).single();
 
     try {
       const result = await Promise.race([dbPromise, timeoutPromise]);
-
       if (result.bypass || result.error || !result.data) {
-        // Se deu erro ou demorou: Cria perfil na memória
-        setProfile({ 
-          id: user.id, 
-          email: user.email, 
-          role: 'ADMIN', // <-- Aqui definimos que você é ADMIN se o banco falhar
-          assigned_entity: 'GLOBAL' 
-        });
+        setProfile({ id: user.id, email: user.email, role: 'ADMIN', assigned_entity: 'GLOBAL' });
       } else {
         setProfile(result.data);
       }
     } catch (e) {
-      // Última rede de segurança
       setProfile({ email: user.email, role: 'ADMIN', assigned_entity: 'GLOBAL' });
     } finally {
       setLoadingProfile(false);
@@ -149,24 +134,20 @@ function App() {
   // --- DADOS ---
   const fetchRecords = async (resetPage = false) => {
     setLoadingData(true);
-    const currentPage = resetPage ? 1 : page;
-    if (resetPage) setPage(1);
-    
-    const from = (currentPage - 1) * rowsPerPage;
-    const to = from + rowsPerPage - 1;
-
     try {
+      const currentPage = resetPage ? 1 : page;
+      if (resetPage) setPage(1);
+      const from = (currentPage - 1) * rowsPerPage;
+      const to = from + rowsPerPage - 1;
+
       let query = supabase.from('logistics_records').select('*', { count: 'exact' });
-      // SEM FILTROS DE SEGURANÇA - VISÃO TOTAL
       query = query.order('created_at', { ascending: false }).range(from, to);
       const { data, count } = await query;
+      
       setRecords(data || []);
       setTotalCount(count || 0);
-    } catch (err) {
-      console.error("Erro dados:", err);
-    } finally {
-      setLoadingData(false);
-    }
+    } catch (err) { console.error(err); } 
+    finally { setLoadingData(false); }
   };
 
   useEffect(() => { if (!loadingProfile && session) fetchRecords(); }, [loadingProfile, session, page, rowsPerPage]);
@@ -197,15 +178,27 @@ function App() {
     return Object.keys(counts).slice(0, 5).map(k => ({ name: k, value: counts[k] }));
   };
 
-  const handleDownloadTemplate = (role) => {
-    let fields = [];
-    let fileName = "";
-    if (role === 'TRP') { fields = FIELDS_TRP; fileName = "Modelo_Apontamento.xlsx"; }
-    else if (role === 'CD') { fields = FIELDS_CD; fileName = "Modelo_Resposta_CD.xlsx"; }
-    else if (role === 'REGIONAL') { fields = FIELDS_REGIONAL; fileName = "Modelo_Regional.xlsx"; }
+  // --- CORREÇÃO DO DOWNLOAD DE MODELO ---
+  const handleDownloadTemplate = (roleInput) => {
+    // Se for ADMIN ou undefined, assume CD como padrão
+    const role = (roleInput === 'ADMIN' || !roleInput) ? 'CD' : roleInput;
     
+    let fields = FIELDS_CD;
+    let fileName = "Modelo_Resposta.xlsx";
+
+    if (role === 'TRP') { 
+        fields = FIELDS_TRP; 
+        fileName = "Modelo_Apontamento_TRP.xlsx"; 
+    }
+    else if (role === 'REGIONAL') { 
+        fields = FIELDS_REGIONAL; 
+        fileName = "Modelo_Regional.xlsx"; 
+    }
+
     const ws = XLSX.utils.json_to_sheet([{}], { header: fields });
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Modelo"); XLSX.writeFile(wb, fileName);
+    const wb = XLSX.utils.book_new(); 
+    XLSX.utils.book_append_sheet(wb, ws, "Modelo"); 
+    XLSX.writeFile(wb, fileName);
   };
 
   const handleCreate = async () => {
@@ -347,20 +340,15 @@ function App() {
              <p className="text-xs font-bold text-slate-400 mt-1">{session?.user?.email} • <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded uppercase">{profile?.role || 'Guest'}</span></p></div>
         </div>
         <div className="flex gap-2">
-          {/* BOTÃO ADMIN SÓ PRA VER PERFIS (OPCIONAL) */}
-          {profile?.role === 'ADMIN' && <button onClick={() => console.log('Admin')} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-slate-100 hover:bg-slate-200"><Users size={16}/> Admin</button>}
-          
           <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-slate-100 hover:bg-slate-200"><LayoutDashboard size={16}/> Dash</button>
           <button onClick={() => supabase.auth.signOut()} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-red-50 text-red-600 hover:bg-red-100"><LogOut size={16}/> Sair</button>
         </div>
       </header>
 
       {/* MAIN CONTENT */}
-      {/* (Removi a tela de admin dedicada para simplificar e focar no dashboard que funciona para todos) */}
       <main className="max-w-[98%] mx-auto p-4 mt-2">
           {activeTab === 'dashboard' && (
             <div className="space-y-4 animate-in fade-in">
-              {/* KPIS */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                  <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100"><div className="flex justify-between items-center"><div><p className="text-xs font-bold text-slate-400 uppercase">Total Visível</p><p className="text-2xl font-black text-slate-900">{totalCount}</p></div><div className="bg-blue-50 p-3 rounded-lg"><Truck size={20} className="text-blue-600"/></div></div></div>
                  <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100"><div className="flex justify-between items-center"><div><p className="text-xs font-bold text-slate-400 uppercase">Pendentes</p><p className="text-2xl font-black text-orange-500">{getStatusData()[1]?.value || 0}</p></div><div className="bg-orange-50 p-3 rounded-lg"><Clock size={20} className="text-orange-600"/></div></div></div>
@@ -376,7 +364,7 @@ function App() {
                    
                    {canEdit && (
                      <div className="flex gap-1">
-                        <button onClick={() => handleDownloadTemplate(profile?.role || 'CD')} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-l-lg font-bold text-xs hover:bg-slate-200 border border-r-0">Modelo</button>
+                        <button onClick={() => handleDownloadTemplate(profile?.role)} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-l-lg font-bold text-xs hover:bg-slate-200 border border-r-0">Modelo</button>
                         <label className="cursor-pointer bg-orange-500 text-white px-4 py-2 rounded-r-lg font-bold text-xs hover:bg-orange-600 shadow-lg flex items-center gap-2"><Upload size={16}/> Lote Respostas <input type="file" className="hidden" onChange={handleBatchUpdate} /></label>
                      </div>
                    )}
