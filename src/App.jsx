@@ -72,25 +72,6 @@ const Login = () => {
   );
 };
 
-// --- ADMIN ---
-const AdminPanel = () => {
-  const [users, setUsers] = useState([]);
-  const fetchUsers = async () => { const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false }); setUsers(data || []); };
-  const updateUser = async (id, role, entity) => { await supabase.from('profiles').update({ role, assigned_entity: entity }).eq('id', id); alert("Perfil Atualizado!"); fetchUsers(); };
-  useEffect(() => { fetchUsers(); }, []);
-  return (
-    <div className="p-6 max-w-6xl mx-auto animate-in fade-in">
-      <h2 className="text-2xl font-black uppercase text-slate-800 mb-6 flex items-center gap-2"><Shield/> Gestão de Usuários</h2>
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs"><tr><th className="p-4">Email</th><th className="p-4">Função</th><th className="p-4">Entidade</th><th className="p-4">Ação</th></tr></thead>
-          <tbody>{users.map(u => (<tr key={u.id} className="border-t border-slate-100"><td className="p-4 font-bold">{u.email}</td><td className="p-4"><select className="p-2 border rounded font-bold text-slate-600" defaultValue={u.role || 'TRP'} id={`role-${u.id}`}><option value="TRP">Transportadora</option><option value="CD">CD (Operacional)</option><option value="REGIONAL">Regional</option><option value="ADMIN">Admin</option></select></td><td className="p-4"><input type="text" className="p-2 border rounded w-full font-mono text-xs" defaultValue={u.assigned_entity || ''} placeholder="Ex: PATRUS" id={`entity-${u.id}`}/></td><td className="p-4"><button onClick={() => updateUser(u.id, document.getElementById(`role-${u.id}`).value, document.getElementById(`entity-${u.id}`).value)} className="bg-slate-900 text-white px-4 py-2 rounded-lg font-bold text-xs hover:bg-slate-700">Salvar</button></td></tr>))}</tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
 // --- APP PRINCIPAL ---
 function App() {
   const [session, setSession] = useState(null);
@@ -112,66 +93,77 @@ function App() {
   const [editRecord, setEditRecord] = useState(null);
   const [formValues, setFormValues] = useState({});
 
-  // --- SESSÃO E PERFIL ---
+  // --- SESSÃO E PERFIL (MODO DE EMERGÊNCIA ATIVADO) ---
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       setSession(session);
-      if (session) await fetchProfile(session.user.id);
+      if (session) await fetchProfile(session.user);
       else setLoadingProfile(false);
     };
     init();
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
-      if (session) await fetchProfile(session.user.id);
+      if (session) await fetchProfile(session.user);
       else { setProfile(null); setLoadingProfile(false); }
     });
     return () => subscription.unsubscribe();
   }, []);
 
-  const fetchProfile = async (userId) => {
+  const fetchProfile = async (user) => {
     setLoadingProfile(true);
     try {
-      const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      // Se não tiver perfil, cria um padrão na memória para não travar (Fallback)
-      if (data) setProfile(data);
-      else setProfile({ role: 'TRP', assigned_entity: 'Novo Usuário', email: 'user@temp.com' });
+      console.log("Tentando buscar perfil para:", user.id);
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+      
+      if (data) {
+        console.log("Perfil encontrado no banco:", data);
+        setProfile(data);
+      } else {
+        console.warn("Perfil não encontrado no banco. Usando Fallback de Emergência.");
+        // PERFIL TEMPORÁRIO DE EMERGÊNCIA PARA NÃO TRAVAR O SISTEMA
+        setProfile({ 
+          id: user.id, 
+          email: user.email, 
+          role: 'ADMIN', // Assume Admin temporariamente se falhar
+          assigned_entity: 'GLOBAL' 
+        });
+      }
     } catch (e) {
-      console.error(e);
-      setProfile({ role: 'TRP', assigned_entity: 'Erro', email: 'error@temp.com' });
+      console.error("Erro crítico ao buscar perfil:", e);
+      // PERFIL DE ERRO (Ainda permite entrar)
+      setProfile({ email: user.email, role: 'ADMIN', assigned_entity: 'ERRO_DB' });
     } finally {
       setLoadingProfile(false);
     }
   };
 
-  // --- DADOS (SEM FILTROS RLS - TUDO ABERTO) ---
+  // --- DADOS (TUDO ABERTO) ---
   const fetchRecords = async (resetPage = false) => {
     setLoadingData(true);
-    const currentPage = resetPage ? 1 : page;
-    if (resetPage) setPage(1);
-    
-    const from = (currentPage - 1) * rowsPerPage;
-    const to = from + rowsPerPage - 1;
-
     try {
+      const currentPage = resetPage ? 1 : page;
+      if (resetPage) setPage(1);
+      
+      const from = (currentPage - 1) * rowsPerPage;
+      const to = from + rowsPerPage - 1;
+
       let query = supabase.from('logistics_records').select('*', { count: 'exact' });
-      
-      // AQUI MUDOU: Não tem mais 'if' filtrando por entidade. Todo mundo vê tudo.
-      
       query = query.order('created_at', { ascending: false }).range(from, to);
+      
       const { data, count, error } = await query;
       if (error) throw error;
       
       setRecords(data || []);
       setTotalCount(count || 0);
     } catch (err) {
-      console.error("Erro dados:", err);
+      console.error("Erro ao buscar registros:", err);
     } finally {
       setLoadingData(false);
     }
   };
 
-  useEffect(() => { if (!loadingProfile) fetchRecords(); }, [loadingProfile, page, rowsPerPage]);
+  useEffect(() => { if (!loadingProfile && session) fetchRecords(); }, [loadingProfile, session, page, rowsPerPage]);
 
   const fetchAudit = async (recordId) => {
     const { data } = await supabase.from('audit_logs').select('*').eq('record_id', recordId).order('created_at', { ascending: false });
@@ -179,7 +171,6 @@ function App() {
   };
 
   const logAction = async (recordId, action, details) => {
-    // Loga quem fez o quê
     await supabase.from('audit_logs').insert([{ record_id: recordId, action, changed_by: session?.user?.email, details }]);
   };
 
@@ -206,12 +197,10 @@ function App() {
     if (role === 'TRP') { fields = FIELDS_TRP; fileName = "Modelo_Apontamento.xlsx"; }
     else if (role === 'CD') { fields = FIELDS_CD; fileName = "Modelo_Resposta_CD.xlsx"; }
     else if (role === 'REGIONAL') { fields = FIELDS_REGIONAL; fileName = "Modelo_Regional.xlsx"; }
-    
     const ws = XLSX.utils.json_to_sheet([{}], { header: fields });
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Modelo"); XLSX.writeFile(wb, fileName);
   };
 
-  // --- AÇÕES ---
   const handleCreate = async () => {
     if (!formValues['TRANSPORTADORA'] || !formValues['SHIPMENT']) return alert("Preencha Transportadora e Shipment.");
     const vitalData = {
@@ -229,12 +218,10 @@ function App() {
 
   const handleUpdate = async () => {
     if (!editRecord) return;
-    if (isLocked(editRecord) && profile?.role !== 'ADMIN') return alert("ERRO: Registro finalizado."); // Admin pode destrancar se quiser
-    
+    if (isLocked(editRecord) && profile?.role !== 'ADMIN') return alert("ERRO: Registro finalizado."); 
     const currentDetails = editRecord.details || {}; const newDetails = { ...currentDetails, ...formValues };
     const updateData = { details: newDetails }; 
     if (formValues['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = formValues['RETORNO DA OCORRÊNCIA'];
-    
     const { error } = await supabase.from('logistics_records').update(updateData).eq('id', editRecord.id);
     if (!error) { await logAction(editRecord.id, 'ATUALIZACAO', { role: profile?.role, fields: formValues }); alert('Salvo!'); setEditRecord(null); setFormValues({}); fetchRecords(); } 
     else { alert('Erro: ' + error.message); }
@@ -270,14 +257,13 @@ function App() {
         const bstr = evt.target.result; const wb = XLSX.read(bstr, { type: 'binary' }); const ws = wb.Sheets[wb.SheetNames[0]]; 
         const rows = XLSX.utils.sheet_to_json(ws);
         let updated = 0, locked = 0;
-        
         for (const row of rows) {
            const key = row['SHIPMENT'] || row['PEDIDO'];
            if (!key) continue;
            const { data: exists } = await supabase.from('logistics_records').select('*').eq('pedido', String(key)).limit(1);
            if (exists && exists[0]) {
               const rec = exists[0];
-              if (isLocked(rec) && profile?.role !== 'ADMIN') { locked++; continue; } // Admin passa por cima
+              if (isLocked(rec) && profile?.role !== 'ADMIN') { locked++; continue; } 
               const newDetails = { ...rec.details, ...row };
               const updateData = { details: newDetails };
               if (row['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = row['RETORNO DA OCORRÊNCIA'];
@@ -377,10 +363,8 @@ function App() {
                  <div className="relative w-full md:w-96"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16}/><input type="text" placeholder="Filtrar nesta página..." className="w-full pl-10 pr-4 py-3 rounded-lg border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
                  
                  <div className="flex gap-2">
-                   {/* SÓ MOSTRA NOVO SE FOR TRP OU ADMIN */}
                    {canCreate && <button onClick={() => setActiveTab('create')} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold text-sm hover:bg-blue-700 shadow-lg flex items-center gap-2"><Upload size={16}/> Novo</button>}
                    
-                   {/* SÓ MOSTRA RESPOSTAS SE FOR CD/REG/ADMIN */}
                    {canEdit && (
                      <div className="flex gap-1">
                         <button onClick={() => handleDownloadTemplate(profile?.role || 'CD')} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-l-lg font-bold text-xs hover:bg-slate-200 border border-r-0">Modelo</button>
@@ -420,7 +404,7 @@ function App() {
               </div>
             </div>
           )}
-          {activeTab === 'create' && canCreate && (
+          {activeTab === 'create' && (
             <div className="max-w-4xl mx-auto space-y-6">
               <button onClick={() => setActiveTab('dashboard')} className="font-bold text-slate-500 mb-4">← Voltar</button>
               <div className="bg-white p-8 rounded-2xl shadow-lg border border-slate-100">
