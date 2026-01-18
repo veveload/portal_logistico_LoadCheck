@@ -4,7 +4,7 @@ import {
   Truck, Upload, LayoutDashboard, CheckCircle, Clock, 
   Eye, X, Edit, Save, Download, 
   FileSpreadsheet, LogOut, Shield, Users, Lock, ChevronLeft, ChevronRight,
-  MapPin, AlertOctagon, FileText, History, AlertTriangle
+  MapPin, AlertOctagon, FileText, History, AlertTriangle, Search
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -34,7 +34,7 @@ const FIELDS_REGIONAL = ALL_COLUMNS_ORDERED.slice(36);
 const REQUIRED_FIELDS_RESPONSE = ['SHIPMENT', 'RETORNO DA OCORRÊNCIA'];
 const LOCKED_STATUSES = ['FINALIZADO', 'PROCEDENTE', 'IMPROCEDENTE', 'ACORDADO'];
 
-// --- COMPONENTE LOGIN ---
+// --- LOGIN ---
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -47,39 +47,32 @@ const Login = () => {
     try {
       if (isSignUp) {
         const { error } = await supabase.auth.signUp({ email, password });
-        if (error) alert(error.message); else alert("Conta criada! Aguarde liberação do Admin.");
+        if (error) alert(error.message); else alert("Conta criada!");
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) alert(error.message);
       }
-    } catch (err) {
-      alert("Erro de conexão: " + err.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) { alert(err.message); } 
+    finally { setLoading(false); }
   };
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md text-center">
-        <div className="bg-orange-500 w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-           <Lock className="text-white" size={32}/>
-        </div>
-        <h1 className="text-2xl font-black uppercase text-slate-900 mb-1">Portal Logístico</h1>
-        <p className="text-slate-400 text-sm font-bold mb-8">Acesso Corporativo</p>
-        
+        <div className="bg-orange-500 w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-lg"><Lock className="text-white" size={32}/></div>
+        <h1 className="text-2xl font-black uppercase text-slate-900 mb-8">Portal Logístico</h1>
         <form onSubmit={handleAuth} className="space-y-4 text-left">
           <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label><input type="email" required className="w-full p-3 border border-slate-200 rounded-lg font-bold" value={email} onChange={e => setEmail(e.target.value)} /></div>
           <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Senha</label><input type="password" required className="w-full p-3 border border-slate-200 rounded-lg font-bold" value={password} onChange={e => setPassword(e.target.value)} /></div>
-          <button disabled={loading} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:scale-[1.01] transition-transform shadow-lg">{loading ? 'Conectando...' : isSignUp ? 'Criar Conta' : 'Entrar'}</button>
+          <button disabled={loading} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:scale-[1.01] transition-transform shadow-lg">{loading ? '...' : isSignUp ? 'Criar Conta' : 'Entrar'}</button>
         </form>
-        <button onClick={() => setIsSignUp(!isSignUp)} className="w-full mt-6 text-xs font-bold text-slate-400 hover:text-slate-600">{isSignUp ? 'Voltar para Login' : 'Não tem conta? Cadastrar'}</button>
+        <button onClick={() => setIsSignUp(!isSignUp)} className="w-full mt-6 text-xs font-bold text-slate-400 hover:text-slate-600">{isSignUp ? 'Voltar para Login' : 'Criar nova conta'}</button>
       </div>
     </div>
   );
 };
 
-// --- COMPONENTE ADMIN ---
+// --- ADMIN ---
 const AdminPanel = () => {
   const [users, setUsers] = useState([]);
   const fetchUsers = async () => { const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false }); setUsers(data || []); };
@@ -113,7 +106,6 @@ function App() {
   const [rowsPerPage, setRowsPerPage] = useState(100);
   const [totalCount, setTotalCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
-  const [adminEntityFilter, setAdminEntityFilter] = useState('');
 
   const [viewRecord, setViewRecord] = useState(null);
   const [auditHistory, setAuditHistory] = useState([]);
@@ -129,7 +121,6 @@ function App() {
       else setLoadingProfile(false);
     };
     init();
-    
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
       if (session) await fetchProfile(session.user.id);
@@ -142,18 +133,19 @@ function App() {
     setLoadingProfile(true);
     try {
       const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      // Se não tiver perfil, cria um padrão na memória para não travar (Fallback)
       if (data) setProfile(data);
-      else console.log("Perfil ainda não criado.");
+      else setProfile({ role: 'TRP', assigned_entity: 'Novo Usuário', email: 'user@temp.com' });
     } catch (e) {
-      console.error("Erro perfil:", e);
+      console.error(e);
+      setProfile({ role: 'TRP', assigned_entity: 'Erro', email: 'error@temp.com' });
     } finally {
       setLoadingProfile(false);
     }
   };
 
-  // --- DADOS ---
+  // --- DADOS (SEM FILTROS RLS - TUDO ABERTO) ---
   const fetchRecords = async (resetPage = false) => {
-    if (!profile) return;
     setLoadingData(true);
     const currentPage = resetPage ? 1 : page;
     if (resetPage) setPage(1);
@@ -164,13 +156,9 @@ function App() {
     try {
       let query = supabase.from('logistics_records').select('*', { count: 'exact' });
       
-      // Filtro Admin Emulação
-      if (profile.role === 'ADMIN' && adminEntityFilter) {
-         query = query.or(`trp.ilike.%${adminEntityFilter}%,details->>'CENTRO (PA LIGHT)'.ilike.%${adminEntityFilter}%`);
-      }
-
-      query = query.order('created_at', { ascending: false }).range(from, to);
+      // AQUI MUDOU: Não tem mais 'if' filtrando por entidade. Todo mundo vê tudo.
       
+      query = query.order('created_at', { ascending: false }).range(from, to);
       const { data, count, error } = await query;
       if (error) throw error;
       
@@ -183,7 +171,17 @@ function App() {
     }
   };
 
-  useEffect(() => { if (profile) fetchRecords(); }, [profile, page, rowsPerPage, adminEntityFilter]);
+  useEffect(() => { if (!loadingProfile) fetchRecords(); }, [loadingProfile, page, rowsPerPage]);
+
+  const fetchAudit = async (recordId) => {
+    const { data } = await supabase.from('audit_logs').select('*').eq('record_id', recordId).order('created_at', { ascending: false });
+    setAuditHistory(data || []);
+  };
+
+  const logAction = async (recordId, action, details) => {
+    // Loga quem fez o quê
+    await supabase.from('audit_logs').insert([{ record_id: recordId, action, changed_by: session?.user?.email, details }]);
+  };
 
   // --- HELPERS ---
   const isLocked = (r) => LOCKED_STATUSES.includes((r.retornoOcorrencia || '').toUpperCase());
@@ -202,16 +200,44 @@ function App() {
     return Object.keys(counts).slice(0, 5).map(k => ({ name: k, value: counts[k] }));
   };
 
-  // --- AÇÕES ---
-  const logAction = async (rid, action, details) => {
-    await supabase.from('audit_logs').insert([{ record_id: rid, action, changed_by: profile.email, details }]);
+  const handleDownloadTemplate = (role) => {
+    let fields = [];
+    let fileName = "";
+    if (role === 'TRP') { fields = FIELDS_TRP; fileName = "Modelo_Apontamento.xlsx"; }
+    else if (role === 'CD') { fields = FIELDS_CD; fileName = "Modelo_Resposta_CD.xlsx"; }
+    else if (role === 'REGIONAL') { fields = FIELDS_REGIONAL; fileName = "Modelo_Regional.xlsx"; }
+    
+    const ws = XLSX.utils.json_to_sheet([{}], { header: fields });
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Modelo"); XLSX.writeFile(wb, fileName);
   };
 
-  const handleDownloadTemplate = (role) => {
-    let fields = role === 'TRP' ? FIELDS_TRP : (role === 'REGIONAL' ? FIELDS_REGIONAL : FIELDS_CD);
-    const ws = XLSX.utils.json_to_sheet([{}], { header: fields });
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Modelo");
-    XLSX.writeFile(wb, `Modelo_${role}.xlsx`);
+  // --- AÇÕES ---
+  const handleCreate = async () => {
+    if (!formValues['TRANSPORTADORA'] || !formValues['SHIPMENT']) return alert("Preencha Transportadora e Shipment.");
+    const vitalData = {
+      trp: formValues['TRANSPORTADORA'], 
+      pedido: formValues['SHIPMENT'] || formValues['PEDIDO'], 
+      placaVeiculo: formValues['PLACA VEÍCULO'], 
+      tipoNotificacao: formValues['TIPO DE NOTIFICAÇÂO'], 
+      retornoOcorrencia: null,
+      details: { ...formValues, created_by: session?.user?.email }
+    };
+    const { data, error } = await supabase.from('logistics_records').insert([vitalData]).select();
+    if (!error && data) { await logAction(data[0].id, 'CRIACAO', { origem: 'Manual', fields: formValues }); alert('Criado!'); setFormValues({}); fetchRecords(true); setActiveTab('dashboard'); } 
+    else { alert('Erro: ' + error.message); }
+  };
+
+  const handleUpdate = async () => {
+    if (!editRecord) return;
+    if (isLocked(editRecord) && profile?.role !== 'ADMIN') return alert("ERRO: Registro finalizado."); // Admin pode destrancar se quiser
+    
+    const currentDetails = editRecord.details || {}; const newDetails = { ...currentDetails, ...formValues };
+    const updateData = { details: newDetails }; 
+    if (formValues['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = formValues['RETORNO DA OCORRÊNCIA'];
+    
+    const { error } = await supabase.from('logistics_records').update(updateData).eq('id', editRecord.id);
+    if (!error) { await logAction(editRecord.id, 'ATUALIZACAO', { role: profile?.role, fields: formValues }); alert('Salvo!'); setEditRecord(null); setFormValues({}); fetchRecords(); } 
+    else { alert('Erro: ' + error.message); }
   };
 
   const handleBatchInsert = (e) => {
@@ -222,7 +248,7 @@ function App() {
         const bstr = evt.target.result; const wb = XLSX.read(bstr, { type: 'binary' }); const ws = wb.Sheets[wb.SheetNames[0]]; 
         const data = XLSX.utils.sheet_to_json(ws);
         const formatted = data.map(row => ({
-          trp: profile.assigned_entity && profile.assigned_entity !== 'GLOBAL' ? profile.assigned_entity : (row['TRANSPORTADORA'] || 'IMPORTADO'),
+          trp: row['TRANSPORTADORA'] || 'IMPORTADO',
           pedido: String(row['SHIPMENT'] || row['PEDIDO'] || Math.random().toString().slice(2,8)),
           placaVeiculo: row['PLACA VEÍCULO'] || '', tipoNotificacao: row['TIPO DE NOTIFICAÇÂO'] || 'CARGA EM LOTE', details: row
         }));
@@ -251,7 +277,7 @@ function App() {
            const { data: exists } = await supabase.from('logistics_records').select('*').eq('pedido', String(key)).limit(1);
            if (exists && exists[0]) {
               const rec = exists[0];
-              if (isLocked(rec)) { locked++; continue; }
+              if (isLocked(rec) && profile?.role !== 'ADMIN') { locked++; continue; } // Admin passa por cima
               const newDetails = { ...rec.details, ...row };
               const updateData = { details: newDetails };
               if (row['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = row['RETORNO DA OCORRÊNCIA'];
@@ -269,24 +295,18 @@ function App() {
   const renderFormFields = (fields) => (<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{fields.map(f => (<div key={f}><label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">{f}</label><input className="w-full p-2 border border-slate-200 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none" value={formValues[f] || ''} onChange={e => setFormValues({...formValues, [f]: e.target.value})} /></div>))}</div>);
 
   // --- RENDERIZAÇÃO ---
-  if (loadingProfile) return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Carregando Perfil...</div>;
+  if (loadingProfile) return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Carregando Sistema...</div>;
   if (!session) return <Login />;
-  
-  // Tratamento se o perfil não existir (ex: usuário deletado da tabela profiles)
-  if (!profile) return (
-    <div className="flex flex-col h-screen items-center justify-center gap-4 text-slate-600">
-       <AlertTriangle size={48} className="text-red-500"/>
-       <h2 className="text-xl font-bold">Perfil não encontrado</h2>
-       <p>Seu usuário não possui um perfil ativo. Contate o Admin.</p>
-       <button onClick={() => supabase.auth.signOut()} className="px-6 py-2 bg-slate-900 text-white rounded-lg">Sair</button>
-    </div>
-  );
 
   const filteredRecords = records.filter(r => {
     const t = searchTerm.toLowerCase();
     const d = r.details || {};
     return (d['SHIPMENT'] || '').toString().toLowerCase().includes(t) || (d['PEDIDO'] || '').toString().toLowerCase().includes(t) || (r.trp || '').toLowerCase().includes(t);
   });
+
+  // LOGICA DE BOTÕES: Quem vê o quê?
+  const canCreate = profile?.role === 'TRP' || profile?.role === 'ADMIN';
+  const canEdit = profile?.role === 'CD' || profile?.role === 'REGIONAL' || profile?.role === 'ADMIN';
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-20">
@@ -297,22 +317,32 @@ function App() {
       {editRecord && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in-95">
           <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-            <div className="bg-orange-500 p-6 flex justify-between items-center text-white"><h3 className="font-bold text-xl flex items-center gap-2"><Edit /> Responder ({profile.role})</h3><button onClick={() => {setEditRecord(null); setFormValues({});}}><X size={24}/></button></div>
+            <div className="bg-orange-500 p-6 flex justify-between items-center text-white"><h3 className="font-bold text-xl flex items-center gap-2"><Edit /> Responder ({profile?.role})</h3><button onClick={() => {setEditRecord(null); setFormValues({});}}><X size={24}/></button></div>
             <div className="p-6 overflow-y-auto bg-slate-50">
                <div className="bg-white p-4 rounded-xl border border-orange-200 shadow-sm">
                  <h4 className="text-sm font-bold text-orange-600 uppercase mb-4">Dados da Resposta</h4>
-                 {(profile.role === 'CD' || profile.role === 'ADMIN') && renderFormFields(FIELDS_CD)}
-                 {profile.role === 'REGIONAL' && renderFormFields(FIELDS_REGIONAL)}
+                 {(profile?.role === 'CD' || profile?.role === 'ADMIN') && renderFormFields(FIELDS_CD)}
+                 {(profile?.role === 'REGIONAL' || profile?.role === 'ADMIN') && renderFormFields(FIELDS_REGIONAL)}
                </div>
             </div>
-            <div className="p-4 border-t bg-white flex justify-end gap-2"><button onClick={() => setEditRecord(null)} className="px-6 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-lg">Cancelar</button><button onClick={async () => {
-               if (isLocked(editRecord)) return alert("Registro Fechado!");
-               const newDetails = { ...editRecord.details, ...formValues };
-               const updateData = { details: newDetails };
-               if (formValues['RETORNO DA OCORRÊNCIA']) updateData.retornoOcorrencia = formValues['RETORNO DA OCORRÊNCIA'];
-               const { error } = await supabase.from('logistics_records').update(updateData).eq('id', editRecord.id);
-               if(!error) { await logAction(editRecord.id, 'UPDATE', formValues); alert("Salvo!"); setEditRecord(null); fetchRecords(); }
-            }} className="px-6 py-2 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 flex items-center gap-2"><Save size={18}/> Salvar</button></div>
+            <div className="p-4 border-t bg-white flex justify-end gap-2"><button onClick={() => setEditRecord(null)} className="px-6 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-lg">Cancelar</button><button onClick={handleUpdate} className="px-6 py-2 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 flex items-center gap-2"><Save size={18}/> Salvar</button></div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW MODAL */}
+      {viewRecord && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in-95">
+          <div className="bg-white w-full max-w-7xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="bg-slate-900 p-6 flex justify-between items-center text-white"><h3 className="font-bold text-xl flex items-center gap-2"><FileText /> Detalhes {isLocked(viewRecord) && <span className="bg-red-500 text-white text-[10px] px-2 py-1 rounded">FINALIZADO</span>}</h3><button onClick={() => setViewRecord(null)}><X size={24}/></button></div>
+            <div className="p-8 overflow-y-auto bg-slate-50 space-y-6">
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><h4 className="font-black text-slate-700 uppercase mb-4 flex items-center gap-2"><History size={18}/> Linha do Tempo</h4><div className="space-y-2 max-h-32 overflow-y-auto">{auditHistory.map(log => (<div key={log.id} className="text-xs border-b pb-1 flex gap-2"><span className="font-mono text-slate-500">{new Date(log.created_at).toLocaleString()}</span><span className="font-bold bg-slate-100 px-1 rounded">{log.action}</span><span className="text-blue-600">por {log.changed_by}</span></div>))}</div></div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-white rounded-xl shadow-sm border-t-4 border-blue-500 overflow-hidden"><div className="bg-blue-50 p-3 border-b border-blue-100"><h4 className="font-black text-blue-800 uppercase flex items-center gap-2"><Truck size={16}/> TRP</h4></div><div className="p-4 grid grid-cols-1 gap-3">{FIELDS_TRP.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}</div></div>
+                <div className="bg-white rounded-xl shadow-sm border-t-4 border-orange-500 overflow-hidden"><div className="bg-orange-50 p-3 border-b border-orange-100"><h4 className="font-black text-orange-800 uppercase flex items-center gap-2"><AlertOctagon size={16}/> CD</h4></div><div className="p-4 grid grid-cols-1 gap-3">{FIELDS_CD.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}</div></div>
+                <div className="bg-white rounded-xl shadow-sm border-t-4 border-emerald-500 overflow-hidden"><div className="bg-emerald-50 p-3 border-b border-emerald-100"><h4 className="font-black text-emerald-800 uppercase flex items-center gap-2"><MapPin size={16}/> REGIONAL</h4></div><div className="p-4 grid grid-cols-1 gap-3">{FIELDS_REGIONAL.map(key => (<div key={key} className="border-b border-slate-50 pb-1"><p className="text-[10px] font-bold text-slate-400 uppercase">{key}</p><p className="text-sm font-semibold text-slate-800 break-words">{viewRecord.details?.[key] || '-'}</p></div>))}</div></div>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -321,17 +351,18 @@ function App() {
       <header className="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-10 shadow-sm flex justify-between items-center">
         <div className="flex items-center gap-3">
           <div className="bg-slate-900 p-2 rounded-lg text-white"><LayoutDashboard size={24} /></div>
-          <div><h1 className="text-xl font-black uppercase text-slate-900 leading-none">LoadCheck <span className="text-orange-500">Pro</span></h1><p className="text-xs font-bold text-slate-400 mt-1">{profile.email} • <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{profile.role} - {profile.assigned_entity || 'GLOBAL'}</span></p></div>
+          <div><h1 className="text-xl font-black uppercase text-slate-900 leading-none">LoadCheck <span className="text-orange-500">360º</span></h1>
+             <p className="text-xs font-bold text-slate-400 mt-1">{session?.user?.email} • <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded uppercase">{profile?.role || 'Visitante'}</span></p></div>
         </div>
         <div className="flex gap-2">
-          {profile.role === 'ADMIN' && <button onClick={() => setActiveTab('admin')} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-slate-100 hover:bg-slate-200"><Users size={16}/> Admin</button>}
+          {profile?.role === 'ADMIN' && <button onClick={() => setActiveTab('admin')} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-slate-100 hover:bg-slate-200"><Users size={16}/> Admin</button>}
           <button onClick={() => setActiveTab('dashboard')} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-slate-100 hover:bg-slate-200"><LayoutDashboard size={16}/> Dash</button>
           <button onClick={() => supabase.auth.signOut()} className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm bg-red-50 text-red-600 hover:bg-red-100"><LogOut size={16}/> Sair</button>
         </div>
       </header>
 
       {/* MAIN */}
-      {activeTab === 'admin' && profile.role === 'ADMIN' ? <AdminPanel /> : (
+      {activeTab === 'admin' && profile?.role === 'ADMIN' ? <AdminPanel /> : (
         <main className="max-w-[98%] mx-auto p-4 mt-2">
           {activeTab === 'dashboard' && (
             <div className="space-y-4 animate-in fade-in">
@@ -343,17 +374,25 @@ function App() {
               </div>
 
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
-                 {profile.role === 'ADMIN' && (<div className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200"><Eye className="text-purple-600" size={16} /><input type="text" placeholder="Emular (Ex: PATRUS)" className="bg-transparent text-sm font-bold text-slate-700 outline-none w-48" value={adminEntityFilter} onChange={e => setAdminEntityFilter(e.target.value)} />{adminEntityFilter && <button onClick={() => setAdminEntityFilter('')} className="text-slate-400 hover:text-red-500"><X size={14}/></button>}</div>)}
                  <div className="relative w-full md:w-96"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16}/><input type="text" placeholder="Filtrar nesta página..." className="w-full pl-10 pr-4 py-3 rounded-lg border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
+                 
                  <div className="flex gap-2">
-                   {profile.role === 'TRP' && <button onClick={() => setActiveTab('create')} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold text-sm hover:bg-blue-700 shadow-lg flex items-center gap-2"><Upload size={16}/> Novo</button>}
-                   {(profile.role !== 'TRP') && (<div className="flex gap-1"><button onClick={() => handleDownloadTemplate(profile.role)} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-l-lg font-bold text-xs hover:bg-slate-200 border border-r-0">Modelo</button><label className="cursor-pointer bg-orange-500 text-white px-4 py-2 rounded-r-lg font-bold text-xs hover:bg-orange-600 shadow-lg flex items-center gap-2"><Upload size={16}/> Lote Respostas <input type="file" className="hidden" onChange={handleBatchUpdate} /></label></div>)}
+                   {/* SÓ MOSTRA NOVO SE FOR TRP OU ADMIN */}
+                   {canCreate && <button onClick={() => setActiveTab('create')} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold text-sm hover:bg-blue-700 shadow-lg flex items-center gap-2"><Upload size={16}/> Novo</button>}
+                   
+                   {/* SÓ MOSTRA RESPOSTAS SE FOR CD/REG/ADMIN */}
+                   {canEdit && (
+                     <div className="flex gap-1">
+                        <button onClick={() => handleDownloadTemplate(profile?.role || 'CD')} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-l-lg font-bold text-xs hover:bg-slate-200 border border-r-0">Modelo</button>
+                        <label className="cursor-pointer bg-orange-500 text-white px-4 py-2 rounded-r-lg font-bold text-xs hover:bg-orange-600 shadow-lg flex items-center gap-2"><Upload size={16}/> Lote Respostas <input type="file" className="hidden" onChange={handleBatchUpdate} /></label>
+                     </div>
+                   )}
                  </div>
               </div>
 
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[65vh]">
                 <div className="overflow-auto flex-1 relative">
-                  {loadingData && <div className="absolute inset-0 bg-white/80 z-50 flex items-center justify-center font-bold text-slate-500">Carregando...</div>}
+                  {loadingData && <div className="absolute inset-0 bg-white/80 z-50 flex items-center justify-center font-bold text-slate-500">Carregando dados...</div>}
                   <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
                     <thead className="bg-slate-100 text-slate-500 font-bold uppercase sticky top-0 z-20 shadow-sm">
                       <tr><th className="px-4 py-3 sticky left-0 bg-slate-100 z-30 border-r border-slate-200 shadow-md">Ações</th><th className="px-4 py-3 sticky left-[80px] bg-slate-100 z-30 border-r border-slate-200">Status</th><th className="px-4 py-3 sticky left-[180px] bg-slate-100 z-30 border-r border-slate-200 shadow-md">ID / Data</th>{ALL_COLUMNS_ORDERED.map(col => (<th key={col} className="px-4 py-3 border-r border-slate-200 min-w-[150px]">{col}</th>))}</tr>
@@ -364,7 +403,7 @@ function App() {
                         return (
                         <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'} ${locked ? 'bg-slate-100 opacity-80' : ''}`}>
                           <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r border-slate-200 shadow-md">
-                            <div className="flex gap-1"><button onClick={() => { setViewRecord(r); fetchAudit(r.id); }} className="p-1.5 bg-slate-200 text-slate-600 rounded hover:bg-slate-300"><Eye size={14}/></button>{(profile.role !== 'TRP' && !locked) && (<button onClick={() => {setEditRecord(r); setFormValues({});}} className="p-1.5 bg-orange-500 text-white rounded hover:bg-orange-600"><Edit size={14}/></button>)}{locked && <Lock size={14} className="text-slate-400 m-1"/>}</div>
+                            <div className="flex gap-1"><button onClick={() => { setViewRecord(r); fetchAudit(r.id); }} className="p-1.5 bg-slate-200 text-slate-600 rounded hover:bg-slate-300"><Eye size={14}/></button>{(canEdit && (!locked || profile?.role === 'ADMIN')) && (<button onClick={() => {setEditRecord(r); setFormValues({});}} className="p-1.5 bg-orange-500 text-white rounded hover:bg-orange-600"><Edit size={14}/></button>)}{locked && <Lock size={14} className="text-slate-400 m-1"/>}</div>
                           </td>
                           <td className="px-4 py-2 sticky left-[80px] bg-white z-10 border-r border-slate-200">{r.retornoOcorrencia ? <span className="text-green-600 font-bold flex gap-1 items-center"><CheckCircle size={12}/> {r.retornoOcorrencia}</span> : <span className="text-orange-500 font-bold flex gap-1 items-center"><Clock size={12}/> Pend</span>}</td>
                           <td className="px-4 py-2 sticky left-[180px] bg-white z-10 border-r border-slate-200 font-mono text-slate-400 shadow-md">#{r.id} <br/> {new Date(r.created_at).toLocaleDateString()}</td>
@@ -381,8 +420,7 @@ function App() {
               </div>
             </div>
           )}
-          {/* VIEW: CREATE (Mesmo do anterior, mantido para TRP) */}
-          {activeTab === 'create' && (
+          {activeTab === 'create' && canCreate && (
             <div className="max-w-4xl mx-auto space-y-6">
               <button onClick={() => setActiveTab('dashboard')} className="font-bold text-slate-500 mb-4">← Voltar</button>
               <div className="bg-white p-8 rounded-2xl shadow-lg border border-slate-100">
